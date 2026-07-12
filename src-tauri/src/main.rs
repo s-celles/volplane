@@ -29,6 +29,28 @@ fn emit_state(app: &AppHandle, state: &str, detail: Option<String>) {
     let _ = app.emit("link", serde_json::json!({ "state": state, "detail": detail }));
 }
 
+/// Read lines from a stream and hand each to `sink` — WITH its newline restored, because
+/// `next_line` strips it and the frontend splitter (device.ts, `lines`) needs one to know a
+/// sentence is complete. Miss this and sentences concatenate forever in the frontend's
+/// buffer: the link is live, the Rust is reading, and every box on the screen stays blank.
+///
+/// Returns `Some(error)` on a broken link, `None` on a clean end of stream — the instrument
+/// was unplugged, or Condor was closed. That is not an error, but it must be SAID; do not
+/// pretend the last position is still current.
+async fn pump_lines<R>(reader: R, mut sink: impl FnMut(String)) -> Option<String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut lines = BufReader::new(reader).lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => sink(format!("{line}\n")),
+            Ok(None) => return None,
+            Err(e) => return Some(e.to_string()),
+        }
+    }
+}
+
 /// Connect to Condor, or to any instrument speaking NMEA over TCP.
 /// Condor's default is 127.0.0.1:4353 on the same PC, or the PC's LAN address from a tablet.
 #[tauri::command]
@@ -39,16 +61,8 @@ async fn open_tcp(app: AppHandle, links: State<'_, Links>, host: String, port: u
     emit_state(&app, "live", None);
 
     let handle = tokio::spawn(async move {
-        let mut lines = BufReader::new(stream).lines();
-        loop {
-            match lines.next_line().await {
-                Ok(Some(line)) => emit(&app, &line),
-                // A clean end of stream is not an error. The instrument was unplugged, or
-                // Condor was closed. Say so; do not pretend the last position is still current.
-                Ok(None) => { emit_state(&app, "closed", None); break }
-                Err(e) => { emit_state(&app, "closed", Some(e.to_string())); break }
-            }
-        }
+        let detail = pump_lines(stream, |line| emit(&app, &line)).await;
+        emit_state(&app, "closed", detail);
     });
     links.0.lock().await.push(handle);
     Ok(())
@@ -91,4 +105,38 @@ fn main() {
         .invoke_handler(tauri::generate_handler![open_tcp, open_udp, close_all])
         .run(tauri::generate_context!())
         .expect("volplane failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pump_lines;
+    use tokio::io::AsyncWriteExt;
+
+    /// The regression that blanked the whole screen. `next_line` strips the newline; the
+    /// frontend splitter requires one to know a sentence is complete. If a payload ever goes
+    /// out bare again, sentences concatenate forever in the frontend buffer and nothing on
+    /// the screen updates — with the link showing `live` the whole time.
+    #[tokio::test]
+    async fn every_line_goes_out_newline_terminated() {
+        let input: &[u8] = b"$GPGGA,120001.00,4700.0000,N*7A\r\n$LXWP0,Y,110.0,1.5*32\n";
+        let mut out = Vec::new();
+        let end = pump_lines(input, |s| out.push(s)).await;
+        assert_eq!(out, vec!["$GPGGA,120001.00,4700.0000,N*7A\n", "$LXWP0,Y,110.0,1.5*32\n"]);
+        assert_eq!(end, None); // a clean end of stream is not an error
+    }
+
+    /// TCP does not respect sentence boundaries: one packet may hold half a sentence. The
+    /// pump must reassemble it — one sentence out, not two fragments.
+    #[tokio::test]
+    async fn a_sentence_split_across_packets_is_one_line() {
+        let (mut tx, rx) = tokio::io::duplex(64);
+        tokio::spawn(async move {
+            tx.write_all(b"$GPRMC,120001.00,A,47").await.unwrap();
+            tx.write_all(b"00.0000,N*55\r\n").await.unwrap();
+        });
+        let mut out = Vec::new();
+        let end = pump_lines(rx, |s| out.push(s)).await;
+        assert_eq!(out, vec!["$GPRMC,120001.00,A,4700.0000,N*55\n"]);
+        assert_eq!(end, None);
+    }
 }
