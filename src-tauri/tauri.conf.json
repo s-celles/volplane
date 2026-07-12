@@ -10,8 +10,22 @@
     "devUrl": "http://localhost:1420"
   },
   "app": {
-    "windows": [{ "title": "VOLPLANE", "width": 1000, "height": 700 }],
-    "security": { "csp": null }
+    "windows": [
+      {
+        "title": "VOLPLANE",
+        "width": 1000,
+        "height": 700
+      }
+    ],
+    "security": {
+      "csp": null
+    }
   },
-  "bundle": { "active": true, "targets": "all" }
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
 }

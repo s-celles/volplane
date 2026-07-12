@@ -9,7 +9,7 @@
 // native code (Kotlin); everything here is Rust, on every platform.
 
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::Mutex;

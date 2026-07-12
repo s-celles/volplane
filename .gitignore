@@ -8,6 +8,9 @@
 !*.ts
 !*.html
 !*.css
+!*.png
+!*.ico
+!*.icns
 !*.rs
 !*.toml
 !*.json
