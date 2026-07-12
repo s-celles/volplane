@@ -1,0 +1,25 @@
+# Allowlist mode: ignore everything by default, then explicitly un-ignore what belongs.
+*
+
+# Allow git to descend into directories so the allowlisted files are reachable.
+!*/
+
+# Allowlisted source / config / docs (by extension or exact name).
+!*.ts
+!*.rs
+!*.toml
+!*.json
+!*.md
+!*.yml
+!*.yaml
+!LICENSE
+!.gitignore
+!/bun.lock
+
+# Re-ignore generated and vendored trees (these override the allows above).
+node_modules/
+target/
+dist/
+
+# Assistant instructions: local to the working copy, never part of the project.
+/CLAUDE.md
