@@ -16,6 +16,9 @@
 import { navigate, reground, EMPTY, type NavState } from '../core/nav';
 import { lines, withHealth, type Device, type LinkState } from '../core/device';
 import { igcToSentences } from '../core/replay';
+import { derive, rollingVario } from '../core/compute';
+import { speedToFly, arrival } from '../core/glide';
+import { windEstimator } from '../core/wind';
 import { completeness, type PackSpec, type Held } from '../core/pack';
 import { briefingAt, sandboxWx, type Provenance } from '../core/briefing';
 import { computeLiftMap, calibrateFromTrack, type LiftMap } from '../core/liftmap';
@@ -25,7 +28,8 @@ import { openStore, isPersistent } from './store';
 import { downloadPack, heldFor, loadWeather } from './provision';
 import { completenessHtml, offlineBadgeHtml, briefingHtml, emagramSvg } from './briefing-ui';
 import { paintLiftMap, mixerSvg, mixerHit, legendHtml, type Paint2D, type View } from './liftmap-ui';
-import { elevAtFromTiles, mPerLng, M_PER_LAT } from 'soaring-core/geo';
+import { elevAtFromTiles, mPerLng, M_PER_LAT, distM, bearingDeg } from 'soaring-core/geo';
+import { DEFAULT_POLAR } from 'soaring-core/polar';
 import { parseIGC } from 'soaring-core/igc';
 import { MIN_RATIOS } from 'soaring-core/lift/calib';
 import { LIFT_COMPS } from 'soaring-core/lift/mix';
@@ -69,59 +73,135 @@ root.innerHTML = `
 const app = root.querySelector<HTMLElement>('#fly')!;
 const bf = root.querySelector<HTMLElement>('#briefing')!;
 
-// ============ the Fly screen — Phase 0, verbatim ============
+// ============ the Fly screen — Phase 0's six numbers + Phase 2's computer ============
+// Built ONCE, like the briefing: the settings and connect forms are things the pilot types
+// into, and a 1 Hz render that rebuilt them would eat the caret mid-QNH (the briefing learnt
+// this first; the Fly screen inherits the lesson). Only #fly-view repaints per state.
+
+app.innerHTML = `
+  <h1>VOLPLANE</h1>
+  <div id="fly-view"></div>
+  <form id="fly-set" class="fly-set">
+    <label>MC <input id="set-mc" size="3" value="1.0" inputmode="decimal" /> m/s</label>
+    <label>QNH <input id="set-qnh" size="5" value="1013.25" inputmode="decimal" /> hPa</label>
+    <label>reserve <input id="set-reserve" size="4" value="200" inputmode="numeric" /> m</label>
+    <button id="set-goal" type="button" title="make the current position and ground the final-glide goal">goal: here</button>
+    <span id="goal-label" class="goal-label">no goal</span>
+  </form>
+  <form id="connect">
+    <input id="host" value="127.0.0.1" size="12" />
+    <input id="port" value="4353" size="5" />
+    <button type="submit">Connect (Condor / TCP)</button>
+    <label class="replay">or replay an IGC file <input id="igc" type="file" accept=".igc" /></label>
+  </form>
+  <div class="link">Condor: Setup → Options → NMEA output → TCP, port 4353.</div>
+`;
+const flyView = app.querySelector<HTMLElement>('#fly-view')!;
 
 const fmt = (v: number | null | undefined, digits = 0) =>
   v == null || !Number.isFinite(v) ? null : v.toFixed(digits);
 
-function box(k: string, v: string | null, u = ''): string {
+function box(k: string, v: string | null, u = '', badge = ''): string {
   return `<div class="box${v == null ? ' unknown' : ''}">
-    <div class="k">${k}</div>
+    <div class="k">${k}${badge}</div>
     <div class="v">${v ?? '—'}<span class="u">${v == null ? '' : u}</span></div>
   </div>`;
 }
 
+// ---- the flight computer's own state (Phase 2) ----
+
+const polar = DEFAULT_POLAR;                       // PLA-010: .plr import arrives with settings UI
+const estimator = windEstimator();                 // VEN-001: OUR wind, never merged with theirs
+const avgVario = rollingVario(30);                 // POS-006
+let goal: { lon: number; lat: number; elev: number } | null = null;
+
+const setting = (id: string, fallback: number): number => {
+  const v = Number((app.querySelector(id) as HTMLInputElement).value);
+  return Number.isFinite(v) ? v : fallback;
+};
+
+/** The ESTIMATED badge (VEN-001). Same loud honesty as the briefing's MODELLED: this wind is
+ *  our inference from circle drift, not the instrument's measurement, and the two must never
+ *  wear the same label. */
+const EST_BADGE = ' <span class="badge estimated" title="from circle drift — an estimate, not the instrument">est</span>';
+
 function render(s: NavState, link: LinkState): void {
-  app.innerHTML = `
-    <h1>VOLPLANE — phase 0</h1>
+  const mc = setting('#set-mc', 1);
+  const qnh = setting('#set-qnh', 1013.25);
+  const reserve = setting('#set-reserve', 200);
+  const d = derive(s, polar, qnh);
+  const estWind = estimator.estimate();
+  const stf = speedToFly(polar, mc, d.netto ?? 0);
+
+  // PLA-004: the glide to the goal, priced against the headwind component of OUR estimated
+  // wind (the instrument's, when we have no estimate yet — the box's title says which).
+  let arr: ReturnType<typeof arrival> = null;
+  let windUsed = '';
+  if (goal && s.fix && s.fix.alt != null) {
+    const dist = distM(s.fix.lon, s.fix.lat, goal.lon, goal.lat);
+    const brg = bearingDeg(s.fix.lon, s.fix.lat, goal.lon, goal.lat);
+    const w = estWind ?? s.reportedWind ?? null;
+    windUsed = w === estWind && estWind ? 'estimated wind' : w ? 'instrument wind' : 'no wind';
+    const head = w ? w.speed * Math.cos((w.direction - brg) * Math.PI / 180) : 0;
+    arr = arrival(polar, mc, s.fix.alt, dist, goal.elev, head, reserve);
+  }
+
+  flyView.innerHTML = `
     <div class="boxes">
       ${box('Latitude', fmt(s.fix?.lat, 5), '°')}
       ${box('Longitude', fmt(s.fix?.lon, 5), '°')}
       ${box('Altitude', fmt(s.fix?.alt), 'm')}
+      ${box('Alt QNH', fmt(d.qnhAlt), 'm')}
       ${box('Ground', fmt(s.groundElev), 'm')}
       ${box('Height AGL', fmt(s.agl), 'm')}
       ${box('Vario', fmt(s.vario, 1), 'm/s')}
+      ${box('Avg 30 s', fmt(avgVario.average(), 1), 'm/s')}
+      ${box('Netto', fmt(d.netto, 1), 'm/s')}
+      ${box('TAS', fmt(d.tas && d.tas * 3.6), 'km/h')}
       ${box('Ground speed', fmt(s.groundSpeed && s.groundSpeed * 3.6), 'km/h')}
+      ${box('Speed to fly', fmt(stf * 3.6), 'km/h')}
       ${box('Wind (instrument)', s.reportedWind ? `${s.reportedWind.direction.toFixed(0)}°` : null,
             s.reportedWind ? `/ ${(s.reportedWind.speed * 3.6).toFixed(0)} km/h` : '')}
+      ${box('Wind', estWind ? `${estWind.direction.toFixed(0)}°` : null,
+            estWind ? `/ ${(estWind.speed * 3.6).toFixed(0)} km/h` : '', EST_BADGE)}
+      ${goal ? box(`Arrival <span class="goal-hint" title="${windUsed}">▸ goal</span>`,
+                   fmt(arr && arr.height), 'm') : ''}
     </div>
     <div class="link ${link.state}">Link: ${link.state}${
       link.state === 'closed' && link.error ? ` — ${link.error}` : ''
     }</div>
-    <form id="connect">
-      <input id="host" value="127.0.0.1" size="12" />
-      <input id="port" value="4353" size="5" />
-      <button type="submit">Connect (Condor / TCP)</button>
-      <label class="replay">or replay an IGC file <input id="igc" type="file" accept=".igc" /></label>
-    </form>
-    <div class="link">Condor: Setup → Options → NMEA output → TCP, port 4353.</div>
   `;
-  (app.querySelector('#connect') as HTMLFormElement).onsubmit = e => {
-    e.preventDefault();
-    const host = (app.querySelector('#host') as HTMLInputElement).value;
-    const port = Number((app.querySelector('#port') as HTMLInputElement).value);
-    void run(tcpDevice(host, port));
-  };
-  (app.querySelector('#igc') as HTMLInputElement).onchange = async e => {
-    const f = (e.target as HTMLInputElement).files?.[0];
-    if (!f) return;
-    // ACQ-010, through the front door: the file becomes sentences, and from here on the
-    // computer cannot tell it from Condor. 100 ms per fix ≈ a flight at 10× real time —
-    // fast enough to sweep a whole flight, slow enough to watch the numbers move.
-    const sentences = igcToSentences(await f.text());
-    void run({ id: `replay:${f.name}`, label: f.name, link: 'replay', open: replaySource(sentences, 100) });
-  };
 }
+
+(app.querySelector('#connect') as HTMLFormElement).onsubmit = e => {
+  e.preventDefault();
+  const host = (app.querySelector('#host') as HTMLInputElement).value;
+  const port = Number((app.querySelector('#port') as HTMLInputElement).value);
+  void run(tcpDevice(host, port));
+};
+(app.querySelector('#igc') as HTMLInputElement).onchange = async e => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  // ACQ-010, through the front door: the file becomes sentences, and from here on the
+  // computer cannot tell it from Condor. 100 ms per fix ≈ a flight at 10× real time —
+  // fast enough to sweep a whole flight, slow enough to watch the numbers move.
+  const sentences = igcToSentences(await f.text());
+  void run({ id: `replay:${f.name}`, label: f.name, link: 'replay', open: replaySource(sentences, 100) });
+};
+(app.querySelector('#set-goal') as HTMLButtonElement).onclick = () => {
+  // The goal is where the glider IS, at the ground the DEM knows there. No fix or no ground
+  // means no goal — a final glide to an invented elevation is exactly the number PLA-004
+  // must never show.
+  if (!state.fix || state.groundElev == null) {
+    (app.querySelector('#goal-label') as HTMLElement).textContent = 'no goal — need a fix over known ground';
+    return;
+  }
+  goal = { lon: state.fix.lon, lat: state.fix.lat, elev: state.groundElev };
+  (app.querySelector('#goal-label') as HTMLElement).textContent =
+    `goal ${goal.lat.toFixed(3)}, ${goal.lon.toFixed(3)} @ ${goal.elev.toFixed(0)} m`;
+  render(state, link);
+};
+app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => render(state, link);
 
 let state: NavState = EMPTY;
 let link: LinkState = { state: 'idle' };
@@ -151,7 +231,13 @@ async function run(dev: Device): Promise<void> {
     const { value, done } = await it.next();
     if (done || gen !== runGen) break;
     state = value;
-    if (state.fix) terrain.ensure(state.fix.lon, state.fix.lat);
+    if (state.fix) {
+      terrain.ensure(state.fix.lon, state.fix.lat);
+      // The estimator eats every fix; the averager only real vario samples, clocked by the
+      // fix's own seconds — a replay must average exactly as the live flight did.
+      if (state.fix.alt != null) estimator.add(state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod);
+      if (state.vario != null) avgVario.add(state.fix.sod, state.vario);
+    }
     render(state, link);
   }
 }

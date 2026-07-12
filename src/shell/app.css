@@ -30,6 +30,16 @@ button { cursor: pointer; }
    number it rides on looks exactly like a measurement and is not one. ---- */
 .badge.modelled { display: inline-block; margin-left: .4rem; padding: .1rem .35rem; border-radius: .25rem; background: var(--model); color: #0b0d10; font-size: .6rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; vertical-align: middle; }
 .box .badge.modelled { font-size: .55rem; }
+/* VEN-001's sibling: OUR wind is an estimate from circle drift, and it never wears the
+   instrument's plain label. Cooler colour than modelled — inferred from measurements, not
+   synthesised from a model — but a badge all the same. */
+.badge.estimated { display: inline-block; margin-left: .3rem; padding: .1rem .3rem; border-radius: .25rem; background: #4a7dbd; color: #0b0d10; font-size: .55rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; vertical-align: middle; }
+
+/* ---- the Fly screen's settings row (MC, QNH, reserve, goal) ---- */
+.fly-set { font-size: .85rem; color: var(--dim); }
+.fly-set input { padding: .25rem .4rem; font-size: .85rem; }
+.goal-label { font-variant-numeric: tabular-nums; }
+.goal-hint { color: var(--dim); font-weight: 400; }
 
 /* ---- WX-005: the sandbox must never pass for a sky. Banner and outline, both from the
    .sandbox class briefingHtml derives from the DATA. ---- */

@@ -32,6 +32,9 @@ export interface Reading extends Motion {
   wind?: { speed: number; direction: number };
   /** Pressure altitude (m), when the instrument sends it separately from GPS altitude. */
   pressureAlt?: number;
+  /** Indicated airspeed (m/s), when a vario sentence carries it. The polar and the speed
+   *  ring live on airspeed; ground speed only stands in when the instrument says nothing. */
+  ias?: number;
 }
 
 // ---- the frame ----
@@ -127,6 +130,8 @@ export function parse(line: string, driver: Driver = 'generic'): Reading | null 
     // Six vario fields, not one, and a heading before the wind. Miscount them and the wind
     // direction becomes the heading — a number that looks entirely plausible.
     const r: Reading = {};
+    const ias = num(f[2]);
+    if (ias != null) r.ias = ias / 3.6;                 // LX sends km/h
     const baro = num(f[3]);
     if (baro != null) r.pressureAlt = baro;
     const vario = num(f[4]);

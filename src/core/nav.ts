@@ -17,6 +17,10 @@ export interface NavState {
   groundSpeed?: number;
   track?: number;
   vario?: number;
+  /** Indicated airspeed (m/s) and pressure altitude (m), when a vario sentence supplies
+   *  them. Carried raw: TAS, QNH altitude and the polar's speeds derive in compute.ts. */
+  ias?: number;
+  pressureAlt?: number;
   /** The wind the INSTRUMENT reported. Not the one we estimate (VEN-001) — that is a separate
    *  claim, and conflating them would let a model quietly pass for a measurement (POT-007's
    *  principle, applied to the wind). */
@@ -60,6 +64,8 @@ export function apply(state: NavState, line: string, elev: ElevSampler, driver: 
   if (r.groundSpeed !== undefined) next.groundSpeed = r.groundSpeed;
   if (r.track !== undefined) next.track = r.track;
   if (r.vario !== undefined) next.vario = r.vario;
+  if (r.ias !== undefined) next.ias = r.ias;
+  if (r.pressureAlt !== undefined) next.pressureAlt = r.pressureAlt;
   if (r.wind) next.reportedWind = r.wind;
 
   // The ground, and the height above it. Recomputed only when the position moved — the
