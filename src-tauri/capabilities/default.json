@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window listens for `nmea` and `link` events emitted by the shell. Without core:default the webview cannot even subscribe — the app connects and then shows nothing.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
