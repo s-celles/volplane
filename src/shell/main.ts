@@ -22,7 +22,9 @@ import { windEstimator } from '../core/wind';
 import { completeness, type PackSpec, type Held } from '../core/pack';
 import { briefingAt, sandboxWx, type Provenance } from '../core/briefing';
 import { computeLiftMap, calibrateFromTrack, type LiftMap } from '../core/liftmap';
-import { tcpDevice, replaySource, closeLinks } from './tauri-source';
+import { offerableLinks, missingLinks, type Platform } from '../core/links';
+import type { Driver } from '../core/nmea';
+import { tcpDevice, udpDevice, replaySource, closeLinks } from './tauri-source';
 import { terrainStore, Z } from './terrain';
 import { openStore, isPersistent } from './store';
 import { downloadPack, heldFor, loadWeather } from './provision';
@@ -78,6 +80,15 @@ const bf = root.querySelector<HTMLElement>('#briefing')!;
 // into, and a 1 Hz render that rebuilt them would eat the caret mid-QNH (the briefing learnt
 // this first; the Fly screen inherits the lesson). Only #fly-view repaints per state.
 
+// The connect form is built from ACQ-012's capability matrix, not hand-written: a link the
+// OS forbids never reaches the DOM, and a link the OS allows but this build cannot drive yet
+// is NAMED below the form — the pilot learns the gap from the screen, not from failure.
+const platform: Platform =
+  navigator.platform.startsWith('Mac') ? 'macos'
+  : navigator.platform.startsWith('Win') ? 'windows' : 'linux';
+const offered = offerableLinks(platform).filter(l => l !== 'replay');   // replay has its own file input
+const notYet = missingLinks(platform);
+
 app.innerHTML = `
   <h1>VOLPLANE</h1>
   <div id="fly-view"></div>
@@ -89,14 +100,25 @@ app.innerHTML = `
     <span id="goal-label" class="goal-label">no goal</span>
   </form>
   <form id="connect">
+    <select id="linksel">${offered.map(l => `<option value="${l}">${l.toUpperCase()}</option>`).join('')}</select>
     <input id="host" value="127.0.0.1" size="12" />
     <input id="port" value="4353" size="5" />
-    <button type="submit">Connect (Condor / TCP)</button>
+    <select id="driver" title="ACQ-003: Condor 2 and 3 disagree on the LXWP0 wind direction — the driver is a claim about the instrument, not a preference">
+      <option value="condor2">Condor 2</option>
+      <option value="condor3">Condor 3</option>
+      <option value="generic">generic NMEA</option>
+    </select>
+    <button type="submit">Connect</button>
     <label class="replay">or replay an IGC file <input id="igc" type="file" accept=".igc" /></label>
   </form>
-  <div class="link">Condor: Setup → Options → NMEA output → TCP, port 4353.</div>
+  <div class="link">Condor: Setup → Options → NMEA output → TCP, port 4353.${
+    notYet.length ? ` Not yet drivable in this build: ${notYet.join(', ')}.` : ''}</div>
 `;
 const flyView = app.querySelector<HTMLElement>('#fly-view')!;
+const linkSel = app.querySelector<HTMLSelectElement>('#linksel')!;
+const hostIn = app.querySelector<HTMLInputElement>('#host')!;
+// UDP listens; it has no host to ask for. The field follows the selected link.
+linkSel.onchange = () => { hostIn.hidden = linkSel.value === 'udp'; };
 
 const fmt = (v: number | null | undefined, digits = 0) =>
   v == null || !Number.isFinite(v) ? null : v.toFixed(digits);
@@ -146,8 +168,13 @@ function render(s: NavState, link: LinkState): void {
     arr = arrival(polar, mc, s.fix.alt, dist, goal.elev, head, reserve);
   }
 
+  // SYS-002: a silent or closed source degrades the DISPLAY, not the application. The last
+  // known values stay — a pilot mid-turn must not lose his numbers — but they visibly age:
+  // dimmed, and captioned with what happened. A screen that keeps showing a dead
+  // instrument's last position as current is the failure mode this class exists to prevent.
+  const stale = link.state === 'silent' || link.state === 'closed';
   flyView.innerHTML = `
-    <div class="boxes">
+    <div class="boxes${stale ? ' stale' : ''}">
       ${box('Latitude', fmt(s.fix?.lat, 5), '°')}
       ${box('Longitude', fmt(s.fix?.lon, 5), '°')}
       ${box('Altitude', fmt(s.fix?.alt), 'm')}
@@ -169,15 +196,15 @@ function render(s: NavState, link: LinkState): void {
     </div>
     <div class="link ${link.state}">Link: ${link.state}${
       link.state === 'closed' && link.error ? ` — ${link.error}` : ''
-    }</div>
+    }${stale ? ' — values are the LAST RECEIVED, not current' : ''}</div>
   `;
 }
 
 (app.querySelector('#connect') as HTMLFormElement).onsubmit = e => {
   e.preventDefault();
-  const host = (app.querySelector('#host') as HTMLInputElement).value;
   const port = Number((app.querySelector('#port') as HTMLInputElement).value);
-  void run(tcpDevice(host, port));
+  driver = (app.querySelector('#driver') as HTMLSelectElement).value as Driver;
+  void run(linkSel.value === 'udp' ? udpDevice(port) : tcpDevice(hostIn.value, port));
 };
 (app.querySelector('#igc') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
@@ -208,9 +235,16 @@ let link: LinkState = { state: 'idle' };
 
 // One source at a time. A second Connect (or a replay over a live link) SUPERSEDES the first:
 // without this, both loops keep running and race their writes to `state`, and the screen
-// interleaves two flights — a confirmed bug, reproduced with two live streams.
+// interleaves two flights — a confirmed bug, reproduced with two live streams. This IS the
+// deterministic priority policy ACQ-007 asks for, in its one-source form: the last source
+// the pilot chose wins, wholly, and the screen never blends two instruments.
 let runGen = 0;
 let stopCurrent: (() => void) | null = null;
+// ACQ-003: the driver is a claim about the instrument on the other end, chosen at connect
+// time. Condor 2 and 3 disagree about the LXWP0 wind direction; a wrong claim here reverses
+// the instrument wind silently, which is why it sits in the connect form, not in a settings
+// page nobody rereads.
+let driver: Driver = 'condor2';
 
 async function run(dev: Device): Promise<void> {
   const gen = ++runGen;
@@ -225,7 +259,7 @@ async function run(dev: Device): Promise<void> {
   });
   // The whole flight computer, in one expression: a stream of sentences, a terrain sampler,
   // a driver. It does not know that Tauri, or a TCP socket, or Condor exist.
-  const it = navigate(lines(watched), elev, 'condor2')[Symbol.asyncIterator]();
+  const it = navigate(lines(watched), elev, driver)[Symbol.asyncIterator]();
   stopCurrent = () => void it.return?.();
   for (;;) {
     const { value, done } = await it.next();

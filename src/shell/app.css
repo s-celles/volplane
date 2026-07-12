@@ -12,6 +12,9 @@ h2 { font-size: .9rem; font-weight: 600; letter-spacing: .06em; text-transform: 
 .box .u { font-size: .9rem; color: var(--dim); margin-left: .25rem; }
 /* An unknown value is shown as unknown. It is never shown as zero. */
 .box.unknown .v { color: var(--dim); }
+/* SYS-002: a dead source's last values stay visible but visibly AGED — dimmed and struck
+   through the eye, not erased under a pilot mid-turn, never passed off as current. */
+.boxes.stale .box .v { color: var(--warn); opacity: .55; }
 .link { margin-top: 1.25rem; font-size: .85rem; color: var(--dim); }
 .link.silent { color: var(--warn); }
 .link.closed { color: var(--bad); }
