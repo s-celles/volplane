@@ -17,11 +17,14 @@ import { navigate, reground, EMPTY, type NavState } from '../core/nav';
 import { lines, withHealth, type Device, type LinkState } from '../core/device';
 import { igcToSentences } from '../core/replay';
 import { derive, rollingVario } from '../core/compute';
-import { speedToFly, arrival } from '../core/glide';
+import { speedToFly, arrival, glideRatio } from '../core/glide';
 import { windEstimator } from '../core/wind';
 import { parsePflau, parsePflaa, trafficStore, SEE_AND_AVOID, type FlarmStatus } from '../core/flarm';
 import { igcLogger, type IgcLogger } from '../core/igclog';
 import { parseOpenAir, incursions, type Airspace } from '../core/airspace';
+import { simpleTask, freshProgress, advance, type Task, type TaskProgress, type Waypoint } from '../core/task';
+import { paintMap as paintMovingMap, type MapPaint2D } from './map-ui';
+import type { View as MapView } from './liftmap-ui';
 import { completeness, type PackSpec, type Held } from '../core/pack';
 import { briefingAt, sandboxWx, type Provenance } from '../core/briefing';
 import { computeLiftMap, calibrateFromTrack, type LiftMap } from '../core/liftmap';
@@ -104,7 +107,17 @@ app.innerHTML = `
     <button id="rec" type="button" title="record the flight as an IGC file (LOG)">● record</button>
     <label class="replay">airspace (OpenAir) <input id="oa" type="file" accept=".txt,.openair" /></label>
     <span id="oa-label" class="goal-label"></span>
+    <label class="replay" title="TSK: waypoints as 'name,lon,lat' lines — start first, finish last, fai-2024 sectors">task (CSV)
+      <input id="tsk" type="file" accept=".csv,.txt" /></label>
+    <span id="tsk-label" class="goal-label"></span>
   </form>
+  <div class="canvas-frame map-frame">
+    <canvas id="map" width="480" height="480"></canvas>
+    <div class="map-zoom">
+      <button id="zoom-in" type="button">+</button>
+      <button id="zoom-out" type="button">−</button>
+    </div>
+  </div>
   <form id="connect">
     <select id="linksel">${offered.map(l => `<option value="${l}">${l.toUpperCase()}</option>`).join('')}</select>
     <input id="host" value="127.0.0.1" size="12" />
@@ -148,6 +161,10 @@ const traffic = trafficStore();                    // FLM: the picture, aged on 
 let flarm: FlarmStatus | null = null;              // FLM: the instrument's own judgement
 let logger: IgcLogger | null = null;               // LOG: recording when non-null
 let spaces: Airspace[] = [];                       // ESP: what the loaded file holds
+let task: Task | null = null;                      // TSK: the declared task, if any
+let taskProgress: TaskProgress | null = null;
+const trail: [number, number][] = [];              // CAR: the recent track
+let mapWidthM = 20_000;                            // CAR: zoom, metres across the canvas
 
 const setting = (id: string, fallback: number): number => {
   const v = Number((app.querySelector(id) as HTMLInputElement).value);
@@ -189,6 +206,35 @@ function airspaceHtml(s: NavState): string {
     `<div class="asp-row ${i.kind}">${i.kind === 'inside' ? 'INSIDE' : 'AHEAD 60 s'} — ${
       i.space.class} ${i.space.name}${i.worstCase ? ' (altitude unknown: worst case assumed)' : ''}</div>`,
   ).join('')}</div>`;
+}
+
+/** TSK: the declared task's live state — which point is next, which are turned. */
+function taskHtml(): string {
+  if (!task || !taskProgress) return '';
+  const rows = task.points.map((p, i) => {
+    const done = taskProgress!.validatedAt[i] != null;
+    const current = i === taskProgress!.next;
+    return `<span class="tsk-pt${done ? ' done' : ''}${current ? ' current' : ''}">${p.wp.name}</span>`;
+  }).join(' → ');
+  return `<div class="tsk">Task (${task.rules}): ${rows}${
+    taskProgress.next >= task.points.length ? ' — COMPLETE' : ''}</div>`;
+}
+
+/** CAR: repaint the canvas from the current state. Called from render, cheap at 1 Hz. */
+function repaintMap(s: NavState): void {
+  const canvasEl = app.querySelector<HTMLCanvasElement>('#map');
+  if (!canvasEl) return;
+  const ctx = canvasEl.getContext('2d') as unknown as MapPaint2D;
+  const centre = s.fix ? { lon: s.fix.lon, lat: s.fix.lat } : { lon: 8, lat: 47 };
+  const view: MapView = { centre, widthM: mapWidthM, wPx: canvasEl.width, hPx: canvasEl.height };
+  // The still-air range: AGL × best-glide L/D, no wind. The painter stamps the assumption
+  // on the canvas; a range ring without its label is a promise the polar never made.
+  const ld = glideRatio(polar, speedToFly(polar, 0));
+  const rangeM = s.agl != null && ld != null && s.agl > 0 ? s.agl * ld : null;
+  paintMovingMap(ctx, view, {
+    state: s, trail, spaces, traffic: traffic.picture(s.fix?.sod ?? 0),
+    goal: goal ? { lon: goal.lon, lat: goal.lat } : null, rangeM,
+  });
 }
 
 function render(s: NavState, link: LinkState): void {
@@ -240,10 +286,12 @@ function render(s: NavState, link: LinkState): void {
     </div>
     ${flarmHtml(s)}
     ${airspaceHtml(s)}
+    ${taskHtml()}
     <div class="link ${link.state}">Link: ${link.state}${
       link.state === 'closed' && link.error ? ` — ${link.error}` : ''
     }${stale ? ' — values are the LAST RECEIVED, not current' : ''}</div>
   `;
+  repaintMap(s);
 }
 
 (app.querySelector('#connect') as HTMLFormElement).onsubmit = e => {
@@ -296,6 +344,32 @@ app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => render(state, li
   URL.revokeObjectURL(a.href);
   (app.querySelector('#oa-label') as HTMLElement).textContent = `saved ${n} fixes`;
 };
+(app.querySelector('#tsk') as HTMLInputElement).onchange = async e => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  // One waypoint per line: "name,lon,lat". Lines that fail to parse are counted, not
+  // guessed at — same refusal discipline as OpenAir.
+  const wps: Waypoint[] = [];
+  let refused = 0;
+  for (const line of (await f.text()).split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const [name, lonS, latS] = line.split(',').map(x => x.trim());
+    const lon = Number(lonS), lat = Number(latS);
+    if (name && Number.isFinite(lon) && Number.isFinite(lat)) wps.push({ name, lon, lat });
+    else refused++;
+  }
+  if (wps.length < 2) {
+    (app.querySelector('#tsk-label') as HTMLElement).textContent = 'a task needs at least a start and a finish';
+    return;
+  }
+  task = simpleTask(wps, 'fai-2024');
+  taskProgress = freshProgress(task);
+  (app.querySelector('#tsk-label') as HTMLElement).textContent =
+    `${wps.length} points, ${task.rules}${refused ? `, ${refused} lines refused` : ''}`;
+  render(state, link);
+};
+(app.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => { mapWidthM = Math.max(2000, mapWidthM / 1.5); render(state, link); };
+(app.querySelector('#zoom-out') as HTMLButtonElement).onclick = () => { mapWidthM = Math.min(200_000, mapWidthM * 1.5); render(state, link); };
 (app.querySelector('#oa') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
@@ -365,6 +439,10 @@ async function run(dev: Device): Promise<void> {
       if (state.fix.alt != null) estimator.add(state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod);
       if (state.vario != null) avgVario.add(state.fix.sod, state.vario);
       logger?.add(state);                          // LOG: every fix, once per second
+      trail.push([state.fix.lon, state.fix.lat]);  // CAR: the tail the map draws
+      if (trail.length > 600) trail.shift();       // ~10 min at 1 Hz
+      if (task && taskProgress)                    // TSK: the fold, fix by fix
+        taskProgress = advance(task, taskProgress, state.fix.lon, state.fix.lat, state.fix.sod);
     }
     render(state, link);
   }

@@ -57,6 +57,16 @@ button { cursor: pointer; }
 .traffic-row.alarm-3 { color: var(--bad); }
 .see-avoid { margin-top: .3rem; font-size: .75rem; color: var(--dim); font-style: italic; }
 
+/* ---- CAR: the map and its zoom ---- */
+.map-frame { position: relative; margin-top: 1rem; max-width: 30rem; }
+.map-zoom { position: absolute; top: .5rem; right: .5rem; display: flex; flex-direction: column; gap: .25rem; }
+.map-zoom button { width: 2rem; padding: .2rem; }
+
+/* ---- TSK: the task ribbon ---- */
+.tsk { margin-top: .75rem; font-size: .9rem; color: var(--dim); }
+.tsk-pt.done { color: var(--ok); }
+.tsk-pt.current { color: var(--fg); font-weight: 600; }
+
 /* ---- ESP-003: the two verdicts never share a colour. ---- */
 .airspace { margin-top: .75rem; font-size: .9rem; }
 .asp-row { padding: .35rem .6rem; border-radius: .35rem; margin-top: .25rem; font-weight: 600; }
