@@ -20,11 +20,13 @@
 !LICENSE
 !.gitignore
 !/bun.lock
+!/justfile
 
 # Re-ignore generated and vendored trees (these override the allows above).
 node_modules/
 target/
 dist/
+src-tauri/gen/schemas/
 
 # Assistant instructions: local to the working copy, never part of the project.
 /CLAUDE.md

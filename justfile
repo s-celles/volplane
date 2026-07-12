@@ -1,0 +1,48 @@
+# VOLPLANE — task runner (https://github.com/casey/just)
+# Run `just` to list the recipes. `just check` runs everything a commit should pass.
+
+# The port the NMEA simulator listens on (Condor's default)
+nmea_port := "4353"
+
+# List available recipes
+default:
+    @just --list
+
+# Install dependencies (frozen lockfile, like CI)
+install:
+    bun install --frozen-lockfile
+
+# Core tests (bun): parser, navigation, purity, capabilities
+test:
+    bun test
+
+# Shell tests (Rust): the TCP pump — newline contract, packet reassembly
+test-rust:
+    cargo test --manifest-path src-tauri/Cargo.toml
+
+# Type-check only (no emit)
+typecheck:
+    bun run typecheck
+
+# Everything a commit should pass: type-check, core tests, shell tests
+check: typecheck test test-rust
+
+# The Condor stand-in: NMEA on tcp://127.0.0.1:{{nmea_port}} — run `just dev` in another terminal, click Connect
+sim port=nmea_port:
+    bun run scripts/nmea-sim.ts {{port}}
+
+# The app, live-reloaded (starts the frontend server via beforeDevCommand)
+dev:
+    bun run tauri dev
+
+# Production bundles for this machine's platform (.app/.dmg on macOS)
+build:
+    bun run tauri build
+
+# Regenerate every platform icon from the single source, assets/icon.png
+icons:
+    bun run tauri icon assets/icon.png --output src-tauri/icons
+
+# Remove build output (frontend bundle and Rust target)
+clean:
+    rm -rf dist src-tauri/target
