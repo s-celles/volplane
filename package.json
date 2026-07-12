@@ -1,0 +1,24 @@
+{
+  "name": "volplane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A free soaring flight computer.",
+  "license": "AGPL-3.0",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "dev": "bun build ./index.html --outdir=dist --sourcemap=linked --watch",
+    "build": "bun build ./index.html --outdir=dist --minify",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "soaring-core": "github:s-celles/soaring-core#v0.2.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/cli": "^2",
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VOLPLANE",
+  "version": "0.0.0",
+  "identifier": "org.volplane.app",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [{ "title": "VOLPLANE", "width": 1000, "height": 700 }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": true, "targets": "all" }
+}

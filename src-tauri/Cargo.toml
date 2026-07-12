@@ -1,0 +1,16 @@
+[package]
+name = "volplane"
+version = "0.0.0"
+edition = "2021"
+license = "AGPL-3.0"
+description = "A free soaring flight computer."
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["net", "io-util", "rt", "macros", "sync", "time"] }
