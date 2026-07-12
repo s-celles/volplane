@@ -50,3 +50,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Build the app
         run: bun run tauri build --no-bundle
+      # The shell's own tests: the TCP pump's newline contract, packet reassembly. The build
+      # above already compiled the dependencies, so this is cheap.
+      - name: Test the shell
+        run: cargo test --manifest-path src-tauri/Cargo.toml

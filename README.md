@@ -8,21 +8,29 @@ A free soaring flight computer. **Phase 0** — a skeleton that walks.
 
 ## What works today
 
-A stream of NMEA sentences comes in over TCP or UDP; a position, an altitude, a **height above
-ground**, a vario and the instrument's wind come out. Nothing more — and claiming less is the
-point: every number on the screen can be checked against the simulator.
+A stream of NMEA sentences comes in over TCP or UDP — or out of a **replayed IGC file**
+(`ACQ-010`); a position, an altitude, a **height above ground** on the real terrain, a vario
+and the instrument's wind come out. Nothing more — and claiming less is the point: every
+number on the screen can be checked against the simulator, and the ground against a map.
 
 ```
   #    lat       lon       alt      ground    AGL     vario   wind
-   1  47.0000  8.0002    1502m      502m    1000m     —       —
-   2  47.0000  8.0004    1503m      504m     999m    1.5    270°
-   3  47.0000  8.0006    1505m      506m     999m    1.5    270°
-   4  47.0000  8.0008    1506m      508m     998m    1.5    270°
+   1  47.0000  8.0002    1502m      944m     558m     1.5    270°
+   2  47.0000  8.0004    1503m      944m     559m     1.5    270°
+   3  47.0000  8.0006    1505m      954m     551m     1.5    270°
+   4  47.0000  8.0008    1506m      965m     541m     1.5    270°
 ```
 
-The glider is **climbing** — and its height above ground is **falling**, because the terrain is
-rising faster than it is. That is the number this phase exists to get right, and it is the one
-that keeps a glider out of a hillside.
+The glider is **climbing** — and its height above ground is **falling**, because the terrain
+is rising faster than it is (those are the real slopes of the Napf, east of 47°N 8°E). That
+is the number this phase exists to get right, and it is the one that keeps a glider out of a
+hillside.
+
+The terrain is read from terrarium DEM tiles fetched over HTTP as the glider moves (AWS Open
+Data; decoded with UPNG, not a canvas — a canvas may color-manage the pixels, and here the
+RGB **is** the elevation). Until a tile is held the ground is **UNKNOWN**, shown as `—`, never
+as zero. Phase 1 replaces the fetch with an offline pack (`OFF-003`) behind the same lookup;
+the flight computer will not notice.
 
 ## Try it
 
@@ -47,12 +55,16 @@ sudo apt install libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-
                  libgtk-3-dev libxdo-dev librsvg2-dev build-essential
 ```
 
-Then, in two terminals:
+Then, in two terminals (`just sim` and `just dev` if you have [just](https://github.com/casey/just);
+`just check` runs everything a commit should pass):
 
 ```bash
 bun run scripts/nmea-sim.ts     # 1. a Condor stand-in on tcp://127.0.0.1:4353
 bun run tauri dev               # 2. the app — click Connect
 ```
+
+No simulator at hand? **Replay an IGC file** from the same screen — it becomes NMEA sentences
+and enters through the same door as a live instrument, at 10× real time.
 
 The simulator flies east, climbing, over rising ground. Watch the **altitude go up** while the
 **height above ground goes down**: the terrain is rising faster than the glider. That is the

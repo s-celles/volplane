@@ -31,6 +31,18 @@ export interface NavState {
 
 export const EMPTY: NavState = { fix: null, groundElev: null, agl: null };
 
+/** Re-ask the terrain under the CURRENT fix. Needed twice: by `apply` when a fix moves, and
+ *  by the shell when a tile arrives — the ground under an unmoved glider just became known,
+ *  and waiting a whole fix for the AGL to appear would show UNKNOWN over terrain we hold.
+ *  Pure, and identity-preserving: if nothing changed, the same state comes back. */
+export function reground(state: NavState, elev: ElevSampler): NavState {
+  if (!state.fix) return state;
+  const g = elev(state.fix.lon, state.fix.lat);
+  const agl = g != null && state.fix.alt != null ? state.fix.alt - g : null;
+  if (g === state.groundElev && agl === state.agl) return state;
+  return { ...state, groundElev: g, agl };
+}
+
 /** Apply one sentence to the state. Pure: state in, state out. A sentence that parses to
  *  nothing leaves the state EXACTLY as it was (ACQ-005) — including the object identity, so a
  *  UI can cheaply tell that nothing happened. */
@@ -39,7 +51,12 @@ export function apply(state: NavState, line: string, elev: ElevSampler, driver: 
   if (!r) return state;
 
   const next: NavState = { ...state };
-  if (r.fix) next.fix = r.fix;
+  // GGA carries the altitude; RMC, of the SAME instant, does not. Merging the altitude across
+  // the pair is reading the receiver correctly; carrying it to a LATER fix would be inventing
+  // a measurement — one second is 1.5 m of climb, or much more of sink.
+  if (r.fix) next.fix = r.fix.alt == null && state.fix?.sod === r.fix.sod
+    ? { ...r.fix, alt: state.fix.alt }
+    : r.fix;
   if (r.groundSpeed !== undefined) next.groundSpeed = r.groundSpeed;
   if (r.track !== undefined) next.track = r.track;
   if (r.vario !== undefined) next.vario = r.vario;
@@ -47,12 +64,7 @@ export function apply(state: NavState, line: string, elev: ElevSampler, driver: 
 
   // The ground, and the height above it. Recomputed only when the position moved — the
   // elevation sampler may hit a tile cache, and a flight computer runs at 1 Hz for hours.
-  if (r.fix) {
-    const g = elev(r.fix.lon, r.fix.lat);
-    next.groundElev = g;
-    next.agl = g != null && next.fix?.alt != null ? next.fix.alt - g : null;
-  }
-  return next;
+  return r.fix ? reground(next, elev) : next;
 }
 
 /** Drive the state from a source of sentences. This is the whole flight computer's intake:

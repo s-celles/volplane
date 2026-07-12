@@ -4,7 +4,7 @@
 // If any of the three is a lie — the port, the kernel, the parser — it fails here, and it
 // fails now rather than in six months.
 import { test, expect } from 'bun:test';
-import { apply, navigate, EMPTY, type NavState } from './nav';
+import { apply, navigate, reground, EMPTY, type NavState } from './nav';
 import { lines, withHealth, type LinkState } from './device';
 import type { ElevSampler } from 'soaring-core/ports';
 import { distM } from 'soaring-core/geo';
@@ -127,6 +127,47 @@ test('a source that goes silent is reported, not quietly trusted', async () => {
   expect(seen.some(s => s.state === 'live')).toBe(true);
   expect(seen.some(s => s.state === 'silent')).toBe(true);   // the link went quiet, and we said so
   expect(seen[seen.length - 1].state).toBe('closed');
+});
+
+// ---- GGA and RMC are a pair, not rivals ----
+
+test('an RMC of the same second does not erase the altitude GGA just gave', () => {
+  // Receivers emit GGA (with altitude) and RMC (without) for the SAME instant. Taking each
+  // fix at face value blinks the altitude — and the AGL with it — twice a second. Same
+  // second, same altitude: that is a merge, not an invention.
+  const withAlt = apply(EMPTY, gga(0, 0, 1500), slope);
+  const rmc = cs('$GPRMC,120000.00,A,4700.0000,N,00800.0000,E,54.0,090.0,110726,,,A');
+  const after = apply(withAlt, rmc, slope);
+  expect(after.fix!.alt).toBe(1500);
+  expect(after.agl).toBeCloseTo(1000, 2);
+  expect(after.groundSpeed).toBeCloseTo(54 * 0.514444, 4);   // and RMC still contributed
+});
+
+test('an RMC of a DIFFERENT second carries no stale altitude', () => {
+  // One second later the glider may be 5 m higher or lower. An altitude is a measurement of
+  // an instant; gluing an old one onto a new fix would be inventing data.
+  const withAlt = apply(EMPTY, gga(0, 0, 1500), slope);
+  const later = cs('$GPRMC,120007.00,A,4700.0000,N,00800.0000,E,54.0,090.0,110726,,,A');
+  expect(apply(withAlt, later, slope).fix!.alt).toBeUndefined();
+});
+
+// ---- a tile arriving is an event too ----
+
+test('ground that BECOMES known fills the AGL in, without waiting for a fix', () => {
+  // The glider circles in one spot while the DEM loads. When the tile lands, the ground
+  // under the unmoved fix just became known — showing UNKNOWN until the next fix would be
+  // wrong for a second, and a full silence-timeout wrong if the source stalls.
+  const before = apply(EMPTY, gga(0, 0, 1500), nothing);
+  expect(before.agl).toBeNull();
+  const after = reground(before, slope);
+  expect(after.groundElev).toBeCloseTo(500, 3);
+  expect(after.agl).toBeCloseTo(1000, 2);
+});
+
+test('reground with nothing new preserves the object identity', () => {
+  const s = apply(EMPTY, gga(0, 0, 1500), slope);
+  expect(reground(s, slope)).toBe(s);       // same OBJECT — a UI can skip the render
+  expect(reground(EMPTY, slope)).toBe(EMPTY);   // no fix: nothing to reground
 });
 
 // ---- soaring-core really is the one doing the geodesy ----
