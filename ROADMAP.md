@@ -47,11 +47,34 @@ Two consequences for the plan:
 
 They do not block Phase 0, but they must fall before Phase 3.
 
-| | Question | What is at stake |
+| | Question | Status |
 |---|---|---|
-| **D1** | **App shell**: Tauri v2, Capacitor, something else? | Tauri gives mobile **and** desktop from one shell, and a device layer in Rust (far better suited to `ACQ`). Cost: a second language. `C5` — the `DeviceSource` port — is what makes this choice **reversible**, and that is its whole purpose. |
-| **D2** | **How much platform ambition at once**: all three from day one, or Android + desktop first and iOS later? | Android + iOS + desktop from the start would be **more ambitious than the entire existing ecosystem, commercial software included** (§7bis). |
-| **D3** | **Which iOS?** | Two iOS products exist: SeeYou Navigator's (instruments over **BLE**) and XCSoar's (**no Bluetooth at all**: internal GPS + network). Pick one deliberately; do not discover it. |
+| **D1** | **App shell** | ✅ **Decided: Tauri v2.** See below. |
+| **D2** | **How much platform ambition at once**: all three from day one, or Android + desktop first and iOS later? | open — Android + iOS + desktop from the start would be **more ambitious than the entire existing ecosystem, commercial software included** (§7bis). |
+| **D3** | **Which iOS?** | open — two iOS products exist: SeeYou Navigator's (instruments over **BLE**) and XCSoar's (**no Bluetooth at all**: internal GPS + network). Pick one deliberately; do not discover it. |
+
+### D1 — Tauri v2, and what it actually buys us
+
+A Rust shell with a web frontend, on six platforms: Windows, macOS, Linux, Android, iOS. The frontend is plain TypeScript, so **`soaring-core` is imported directly** — no bridge, no rewrite. That criterion, though, does **not** discriminate: Capacitor would reuse it just as fully. The real reasons are elsewhere.
+
+**Desktop is first-class, and desktop is where the early work lives.** Condor, `OFF-003` (data packs) and `OFF-010` (pre-flight completeness) are all desktop tasks — Phases 0, 1 and 2 happen there. Capacitor treats desktop as an afterthought (a PWA, or an Electron side-shell).
+
+**One honest correction, because it undercuts the argument usually made for Tauri:** the device layer is **Rust on desktop only**. Tauri's *mobile* plugins are written in **Kotlin (Android) and Swift (iOS)**; Rust is only the bridge. So "the device layer is in Rust" is half true, and the half that is false is the mobile half.
+
+| | Desktop | Android | iOS |
+|---|---|---|---|
+| Serial / USB | **Rust** (`serialport`) | Kotlin | ❌ *(not permitted)* |
+| **TCP / UDP — Condor** | **Rust** (`tokio`) | **Rust** | **Rust** |
+| BLE | **Rust** (`btleplug`) | Kotlin — *already exists* (`tauri-plugin-blec`) | Swift — *already exists* |
+| Bluetooth Classic (SPP) — the installed base | **Rust** | **Kotlin — to be written** | ❌ *(not permitted)* |
+
+What that table says, and it is the reason the decision still stands:
+
+- **Everything in Phases 0–2 runs over TCP/UDP** — Condor, the ground-truth bench, the whole acquisition chain — and Rust does that natively on all three platforms. **Not one line of Kotlin or Swift** is needed to get there.
+- **BLE is already solved** by an existing plugin. No native code to write.
+- **The only genuinely native piece is Bluetooth Classic on Android**, and it is well bounded — one Kotlin plugin behind the `DeviceSource` port (`C5`).
+
+And `C5` is what keeps this reversible: the computer consumes a stream of sentences. If Tauri turns out to be the wrong bet on mobile, the shell is swapped and the flight computer does not notice.
 
 ---
 
