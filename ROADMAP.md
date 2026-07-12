@@ -50,8 +50,16 @@ They do not block Phase 0, but they must fall before Phase 3.
 | | Question | Status |
 |---|---|---|
 | **D1** | **App shell** | ✅ **Decided: Tauri v2.** See below. |
-| **D2** | **How much platform ambition at once**: all three from day one, or Android + desktop first and iOS later? | open — Android + iOS + desktop from the start would be **more ambitious than the entire existing ecosystem, commercial software included** (§7bis). |
-| **D3** | **Which iOS?** | open — two iOS products exist: SeeYou Navigator's (instruments over **BLE**) and XCSoar's (**no Bluetooth at all**: internal GPS + network). Pick one deliberately; do not discover it. |
+| **D2** | **Platform ambition** | ✅ **Decided: desktop + Android first.** iOS deferred. |
+| **D3** | **Which iOS?** | ⏸ **Deferred with iOS.** Two products exist — SeeYou Navigator's (instruments over **BLE**) and XCSoar's (**no Bluetooth at all**: internal GPS + network) — and the choice is made when iOS is taken up, not before. |
+
+### D2 — Desktop and Android first
+
+Not a retreat: **every link works on those two** (§3bis), so the flight computer can be *complete* there. iOS is the one platform where the installed base of instruments is out of reach by Apple's decision, and where the product is therefore a **different** product — that is precisely why it deserves its own decision (D3) rather than being carried along.
+
+It also matches where the work is. Condor runs on **Windows**. `OFF-003` (data packs) and `OFF-010` (pre-flight completeness) are **desktop** tasks. Phases 0, 1 and 2 happen on the desktop; Android arrives with the instruments in Phase 3.
+
+And it steps back from an ambition the roadmap itself flagged as unreasonable: shipping Android + iOS + desktop from day one would have been **more than the entire existing ecosystem does**, commercial software included.
 
 ### D1 — Tauri v2, and what it actually buys us
 
@@ -159,9 +167,9 @@ Comparing against XCSoar is the *second* best test: it compares us to another pr
 
 ---
 
-## Phase 5 — iOS
+## Phase 5 — iOS *(deferred — D2)*
 
-Depends on **D3**. Two possible products; choose explicitly:
+Not before the flight computer is complete on desktop and Android. Depends on **D3**. Two possible products; choose explicitly:
 
 - **The "SeeYou" iOS**: instruments over **BLE**. The installed base of SPP devices stays out of reach — that is Apple's limit, not ours (§3bis).
 - **The "XCSoar" iOS**: internal GPS + network (UDP/TCP), **no Bluetooth**. Less ambitious, still useful, and deliverable far sooner.
