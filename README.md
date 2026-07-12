@@ -61,6 +61,20 @@ Three things fall out of that, and they are why the constraint exists:
 - **`ACQ-010` (replay) is free**: a replayed file is a source like any other, which is why the
   whole computer is testable with no hardware and no window.
 
+## Icons
+
+`assets/icon.png` is the **single source**. Everything under `src-tauri/icons/` is generated
+from it — the Windows `.ico` (six sizes in one file), the macOS `.icns`, the Android mipmaps,
+the iOS assets:
+
+```bash
+bun run tauri icon assets/icon.png --output src-tauri/icons
+```
+
+Do not hand-write the `.ico`. It was, briefly, and the two icons were then *drawn separately*
+— so replacing the PNG would have left Windows showing the old one, silently. One source, one
+command.
+
 ## Condor is the test bench, not just a use case
 
 The simulator **knows the answer** — the real wind, the real vertical motion of the air. Several
