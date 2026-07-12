@@ -20,6 +20,29 @@ It is also where `OFF-003` and `OFF-010` live — the module the spec calls its 
 
 ---
 
+## The test bench: Condor Soaring
+
+**Condor Soaring** streams live NMEA (TCP port 4353, or a virtual serial port on the same PC). It is first a **real use case** — pilots train with their flight computer wired to the simulator, to learn the instrument before trusting it in the air.
+
+But it is also the only source that gives us a **ground truth**. The simulator *knows* the real wind, the real vertical motion of the air, the real position. Several of the computer's central numbers are **estimates that no real flight can check**, because a real flight offers nothing to compare them against:
+
+| Estimated quantity | Checkable in a real flight? | Checkable in Condor? |
+|---|:-:|:-:|
+| Wind from circle drift (`VEN-001`) | ❌ *nothing to compare against* | ✅ the sim gives the real wind |
+| Netto — the air's vertical motion (`VAR-002`) | ❌ | ✅ |
+| Final glide (`PLA-004`, `PLA-005`) | partly *(you arrive, or you don't)* | ✅ and repeatably |
+
+This is the strongest acceptance test the project has, and it is **better than "compare against XCSoar"**: comparing against XCSoar compares us to another program. Comparing against Condor compares us to **the answer**.
+
+Two consequences for the plan:
+
+- **`ACQ-011` (NMEA over UDP/TCP) moves into Phase 0.** It is not an iOS workaround — it is the main road: the simulator, WiFi instruments, development and testing all travel it.
+- **Condor 2 and Condor 3 are two drivers, not one.** Condor 3 changed the wind-direction convention in `$LXWP0`; conflating them **inverts the wind silently**. XCSoar had to ship a separate driver. That is `ACQ-003`'s whole warning, in one concrete example.
+
+> **⚠ The trap.** It is tempting to validate the **lift potential** (`POT`) against Condor too. **It is a mirage.** Condor's thermals are generated procedurally; they do not derive from terrain, sun and weather the way the `POT` model does. Validating a model against another model proves **nothing** about reality — it only manufactures unearned confidence, which is precisely what `POT-007` exists to prevent. `POT` is validated only against **real observed climbs** (`POT-006`), and stays indicative (`C3`).
+
+---
+
 ## Decisions left open
 
 They do not block Phase 0, but they must fall before Phase 3.
@@ -39,11 +62,12 @@ They do not block Phase 0, but they must fall before Phase 3.
 - Repo, app shell (D1), CI on the target platforms.
 - `soaring-core` as a dependency, pinned to a tag.
 - The **`DeviceSource`** port (`C5`): the computer consumes a stream of sentences and does not know where they come from.
-- **One source only**: **IGC replay** (`ACQ-010`). No hardware required.
+- **Two sources, no hardware**: **IGC replay** (`ACQ-010`) and **live NMEA over TCP/UDP** (`ACQ-011`) — which is already the **Condor** link (`ACQ-013`).
 - Navigation state (`POS-001`, `POS-002`), terrain elevation and height above ground (`TER-002`, `TER-003`) — `soaring-core` already does this.
 
-**Verifiable:** replay an IGC, watch the position and the height above ground go by. On desktop.
-**What it proves:** the port holds, `soaring-core` really is reusable, the shell works, CI passes. If any of the three is a lie, we learn it now and not in six months.
+**Verifiable:** **fly in Condor, and the position and height above ground are right, live.** Not a replay — a real-time stream, with the simulator as the truth.
+**What it proves:** the port holds, `soaring-core` really is reusable, the shell works, the acquisition chain works end to end, CI passes. If any of that is a lie, we learn it now and not in six months.
+**Why this and not IGC replay:** replay proves the maths. Condor proves the *chain* — sockets, parsing, timing, a source that can stall or drop. And it does so with a truth to check against.
 
 ---
 
@@ -74,8 +98,9 @@ They do not block Phase 0, but they must fall before Phase 3.
 - **`POS-003…006`** — altitudes (GPS, QNH, AGL), TAS, rolling vertical average.
 - **`IHM-001`, `IHM-002`, `IHM-004`** — InfoBoxes, pages per flight phase, readable in sunlight.
 
-**Verifiable — and this is a real acceptance test:** replay an IGC and **compare the numbers against XCSoar on the same trace**. Final glide, netto, wind: every difference must be accounted for.
-**Risk:** the MacCready solver is new, subtle code, and it fails *silently* if it is not checked against a reference.
+**Verifiable — and this is the strongest test the project has:** fly in **Condor** and compare our **estimates** against the simulator's **truth** (`ACQ-014`). The estimated wind against the real wind. The netto against the air's real vertical motion. The final glide, by flying it.
+Comparing against XCSoar is the *second* best test: it compares us to another program. Condor compares us to the answer.
+**Risk:** the MacCready solver is new, subtle code, and it fails **silently** if it is not checked against a reference. This is the reference.
 
 ---
 
@@ -84,8 +109,10 @@ They do not block Phase 0, but they must fall before Phase 3.
 **Goal: actually hear a FLARM and a vario.**
 
 - **`ACQ-001a/b`, `ACQ-002`, `ACQ-003`, `ACQ-005`, `ACQ-006`, `ACQ-007`** — NMEA, vendor sentences, a malformed sentence rejected without corrupting the navigation state, a dropped link reported.
-- **`ACQ-011`** — NMEA over **UDP/TCP**. Do this **early**: it is the only route to an instrument on iOS, and the easiest to test (a simulator broadcasting over UDP).
+- **`ACQ-013`** — the **Condor** driver, in its two versions. Condor 2 and Condor 3 disagree on the wind direction in `$LXWP0`, and one driver for both inverts the wind without saying so.
 - **`ACQ-012`** — never offer a link the OS does not allow.
+
+*(`ACQ-011` — NMEA over UDP/TCP — is already done in Phase 0: it is how Condor connects.)*
 - **`ACQ-009`** — internal sensors (GPS, barometer).
 - **`SYS-002`** — a source disappears → controlled degradation, not a crash.
 
@@ -143,9 +170,9 @@ The spec (§9) asks for **quantified acceptance criteria**. The principle:
 
 | Phase | The claim |
 |---|---|
-| 0 | Replay an IGC and the height above ground is right. |
+| 0 | Fly in Condor, live, and the height above ground is right. |
 | 1 | Cut the network: the day's briefing holds, and the pilot knows what is missing. |
-| 2 | On the same trace, our numbers and XCSoar's can be accounted for. |
+| 2 | In Condor, our estimated wind matches the wind the simulator actually applied. |
 | 3 | A FLARM in the cockpit feeds the computer, and unplugging it does not kill it. |
 | 4 | An FAI task validates under the rules actually in force. |
 
