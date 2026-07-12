@@ -1,6 +1,24 @@
 # VOLPLANE
 
-A free soaring flight computer. **Phase 0** — a skeleton that walks.
+A free soaring flight computer. **Phases 0–4 of the roadmap stand** — the skeleton walks,
+briefs, glides, listens and scores:
+
+- **Phase 0** — the chain: NMEA over TCP/UDP or IGC replay in; position, altitude and a
+  height above ground on real terrain out.
+- **Phase 1** — the ground half: offline data packs, pre-flight completeness, the weather
+  snapshot, the four modelled lift fields (loudly badged as models).
+- **Phase 2** — the glide computer: MacCready, speed to fly, final glide with reserve,
+  netto/super-netto, the wind estimated from circle drift (badged `est`, never merged with
+  the instrument's).
+- **Phase 3** — instruments offered honestly (the connect form is built from the platform
+  capability matrix), lost gracefully (a dead source's values visibly age, the app lives).
+- **Phase 4** — FLARM traffic with FLM-005's reminder, IGC logging round-tripped through
+  the kernel's own parser, OpenAir airspace with inside/predicted verdicts and ESP-005's
+  worst case, FAI tasks under **versioned** rules, and a moving map whose glide ring
+  confesses "still air, no wind" on the canvas itself.
+
+Phase 5 (iOS) stays deferred by decision D2; what remains of the MVP is depth (OpenAir
+arcs, AAT scoring, task editing, `.plr` import), not absence.
 
 - Requirements: [`spec-volplane.md`](../spec-volplane.md) (v0.3, French)
 - Plan: [`ROADMAP.md`](ROADMAP.md)
