@@ -8,7 +8,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "dev": "bun build ./index.html --outdir=dist --sourcemap=linked --watch",
+    "dev": "bun run scripts/dev-server.ts",
     "build": "bun build ./index.html --outdir=dist --minify",
     "tauri": "tauri"
   },

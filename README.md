@@ -26,16 +26,44 @@ that keeps a glider out of a hillside.
 
 ## Try it
 
+The flight computer needs nothing — no shell, no window, no hardware. That is C5, and it is
+why this works on any machine:
+
 ```bash
 bun install
-bun test            # 27 tests, no hardware, no window
+bun test          # 27 tests
 bun run typecheck
-
-bun run scripts/nmea-sim.ts        # a Condor stand-in on tcp://127.0.0.1:4353
-bun run tauri dev                  # then connect the app to it
 ```
 
-With the real thing: **Condor → Setup → Options → NMEA output → TCP, port 4353.**
+To run the **app**, you also need Rust and a platform toolchain:
+
+```bash
+# macOS (once)
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Linux (once) — Debian/Ubuntu
+sudo apt install libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+                 libgtk-3-dev libxdo-dev librsvg2-dev build-essential
+```
+
+Then, in two terminals:
+
+```bash
+bun run scripts/nmea-sim.ts     # 1. a Condor stand-in on tcp://127.0.0.1:4353
+bun run tauri dev               # 2. the app — click Connect
+```
+
+The simulator flies east, climbing, over rising ground. Watch the **altitude go up** while the
+**height above ground goes down**: the terrain is rising faster than the glider. That is the
+number Phase 0 exists to get right.
+
+With the real thing: **Condor → Setup → Options → NMEA output → TCP, port 4353.** Same app,
+same screen — the flight computer cannot tell the difference, and that is the point.
+
+> `bun run dev` both builds and serves on `:1420` (Tauri's `devUrl`). `bun build --watch`
+> compiles but does not serve, so without a server `tauri dev` opens a window on a port nobody
+> is listening on and shows a blank page with no useful error.
 
 ## The shape of it
 
