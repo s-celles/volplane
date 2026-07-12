@@ -1,9 +1,10 @@
 /* IHM-004: readable in direct sunlight. High contrast, big numbers, no decoration. */
-:root { color-scheme: dark; --bg:#0b0d10; --fg:#e8eaed; --dim:#8b93a1; --warn:#e0a030; --bad:#e05252; }
+:root { color-scheme: dark; --bg:#0b0d10; --fg:#e8eaed; --dim:#8b93a1; --ok:#4caf78; --warn:#e0a030; --bad:#e05252; --model:#e0a030; --sandbox:#c2419b; }
 * { box-sizing: border-box; margin: 0; }
 body { background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; }
-#app { padding: 1.5rem; max-width: 46rem; }
+#app { padding: 1.5rem; max-width: 64rem; }
 h1 { font-size: 1rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin-bottom: 1.25rem; }
+h2 { font-size: .9rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 1.25rem 0 .75rem; }
 .boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; }
 .box { background: #151920; border-radius: .5rem; padding: .75rem 1rem; }
 .box .k { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
@@ -14,6 +15,94 @@ h1 { font-size: 1rem; font-weight: 600; letter-spacing: .08em; text-transform: u
 .link { margin-top: 1.25rem; font-size: .85rem; color: var(--dim); }
 .link.silent { color: var(--warn); }
 .link.closed { color: var(--bad); }
-form { margin-top: 1.5rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+form { margin-top: 1.5rem; display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
 input, button { font: inherit; padding: .45rem .7rem; border-radius: .35rem; border: 1px solid #2a313c; background: #151920; color: var(--fg); }
 button { cursor: pointer; }
+.replay { font-size: .85rem; color: var(--dim); display: flex; gap: .5rem; align-items: center; }
+.replay input { padding: .25rem; font-size: .8rem; }
+
+/* ---- the tab bar over the two screens ---- */
+.tabs { display: flex; gap: .5rem; margin-bottom: 1.25rem; }
+.tabs button { background: transparent; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; font-size: .8rem; }
+.tabs button.active { color: var(--fg); background: #151920; border-color: #3a4350; }
+
+/* ---- POT-007: the modelled badge. Deliberately loud — it must be unmissable, because the
+   number it rides on looks exactly like a measurement and is not one. ---- */
+.badge.modelled { display: inline-block; margin-left: .4rem; padding: .1rem .35rem; border-radius: .25rem; background: var(--model); color: #0b0d10; font-size: .6rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; vertical-align: middle; }
+.box .badge.modelled { font-size: .55rem; }
+
+/* ---- WX-005: the sandbox must never pass for a sky. Banner and outline, both from the
+   .sandbox class briefingHtml derives from the DATA. ---- */
+.sandbox-banner { background: var(--sandbox); color: #fff; font-weight: 700; letter-spacing: .1em; padding: .4rem .8rem; border-radius: .35rem; margin: .75rem 0; }
+.briefing.sandbox { outline: 2px dashed var(--sandbox); outline-offset: 6px; border-radius: .5rem; }
+fieldset.sandbox-controls { border: 1px dashed color-mix(in srgb, var(--sandbox) 45%, transparent); border-radius: .5rem; padding: .5rem 1rem .75rem; margin: 1rem 0; display: flex; gap: .75rem; flex-wrap: wrap; }
+fieldset.sandbox-controls legend { padding: 0 .4rem; font-size: .85rem; color: var(--dim); }
+fieldset.sandbox-controls label { font-size: .85rem; color: var(--dim); display: flex; gap: .35rem; align-items: center; }
+fieldset.sandbox-controls input { padding: .25rem .4rem; font-size: .85rem; }
+
+/* ---- OFF-005: connectivity as a state chip, validity beside it ---- */
+.net { display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap; font-size: .85rem; margin: .5rem 0 1rem; }
+.net .state { text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.net.online .state { color: var(--ok); }
+.net.offline .state { color: var(--warn); }
+.net .wx-age.unknown { color: var(--dim); }
+.net .volatile { color: var(--warn); }
+
+/* ---- OFF-010/011: completeness, per status ---- */
+.completeness { margin-top: 1.25rem; }
+.pack-status { font-weight: 600; padding: .4rem .6rem; border-radius: .35rem; margin-bottom: .5rem; }
+.pack-status.ready { color: var(--ok); background: rgba(76, 175, 120, .12); }
+.pack-status.not-ready { color: var(--bad); background: rgba(224, 82, 82, .12); }
+.pack-status.unknown { color: var(--dim); background: #151920; }
+.pack-class h3 { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: .6rem 0 .25rem; font-weight: 500; }
+.pack-item { display: flex; gap: .75rem; align-items: baseline; font-size: .85rem; padding: .15rem 0; }
+.pack-item .kind { min-width: 5rem; }
+.pack-item .count { font-variant-numeric: tabular-nums; color: var(--dim); }
+.pack-item.held .status { color: var(--ok); }
+.pack-item.partial .status, .pack-item.stale .status { color: var(--warn); }
+.pack-item.missing .status { color: var(--bad); }
+.pack-item .detail { color: var(--dim); }
+
+/* ---- the hour slider ---- */
+.hour { display: flex; gap: .75rem; align-items: center; margin: 1rem 0; font-size: .85rem; color: var(--dim); }
+.hour input[type="range"] { flex: 1; max-width: 20rem; padding: 0; }
+.hour .val { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+/* ---- the wind ladder ---- */
+table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.wind th, .wind td { padding: .3rem .8rem; text-align: right; border-bottom: 1px solid #1c222b; }
+.wind th { color: var(--dim); font-weight: 500; font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+.wind td.unknown { color: var(--dim); }
+.wind .badge.modelled { font-size: .5rem; margin-left: .3rem; }
+
+/* ---- ANA-004: the emagram ---- */
+.emagram-frame { margin-top: 1rem; }
+.emagram { width: 100%; max-width: 30rem; background: #10141a; border: 1px solid #2a313c; border-radius: .5rem; }
+.emagram polyline.env { stroke: var(--fg); stroke-width: 2; }
+.emagram polyline.parcel { stroke: var(--warn); stroke-width: 2; }
+.emagram line.cloudbase { stroke: #6ab0f3; }
+.emagram line.ceiling { stroke: #b58ee0; }
+.emagram text { font: 11px system-ui, sans-serif; }
+.emagram text.cloudbase { fill: #6ab0f3; }
+.emagram text.ceiling { fill: #b58ee0; }
+.emagram text.unknown { fill: var(--dim); font-size: 2rem; }
+
+/* ---- POT-001…005: the lift map, its mixer and its legend ---- */
+.liftmap { display: flex; gap: 1.25rem; flex-wrap: wrap; align-items: flex-start; margin-top: 1.25rem; }
+.canvas-frame { background: #10141a; border: 1px solid #2a313c; border-radius: .5rem; padding: .25rem; }
+.canvas-frame canvas { display: block; max-width: 100%; }
+.mixer-side { display: flex; flex-direction: column; gap: .75rem; }
+.comp-toggles { display: flex; gap: .75rem; flex-wrap: wrap; font-size: .85rem; color: var(--dim); }
+.comp-toggles label { display: flex; gap: .3rem; align-items: center; }
+/* touch-action none: the drag IS the interaction — a mixer that scrolls the page is no mixer */
+.mixer { touch-action: none; cursor: pointer; }
+.mixer .mixer-shape { fill: #10141a; stroke: #2a313c; stroke-width: 2; }
+.mixer .mixer-label { fill: var(--dim); font: 11px system-ui, sans-serif; }
+.mixer .mixer-handle { fill: var(--fg); stroke: var(--bg); stroke-width: 2; }
+.lift-legend { display: flex; flex-direction: column; gap: .25rem; font-size: .85rem; }
+.legend-row .swatch { display: inline-block; width: .9rem; height: .9rem; border-radius: .2rem; margin-right: .4rem; vertical-align: -.1rem; }
+/* POT-007's last hop: the legend says WHY a layer is quiet — unknown terrain or no driver —
+   so an empty canvas cannot pass for a quiet sky. */
+.legend-note { color: var(--warn); margin-left: .5rem; font-size: .75rem; }
+.legend-note.inactive { color: var(--dim); }
+.progress, .cal { font-size: .85rem; color: var(--dim); }

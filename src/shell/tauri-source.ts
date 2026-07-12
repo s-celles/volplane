@@ -34,13 +34,21 @@ function eventStream(): AsyncIterable<string> {
           while (queue.length) yield queue.shift()!;
         }
       } finally {
+        // Unsubscribe only. close_all does NOT belong here: the shell closes EVERY link, and
+        // this finally fires whenever an old stream is torn down — which may be moments AFTER
+        // the replacement link opened. A dying stream that reaches for close_all kills its
+        // successor; the caller who opens the next device is the one who closes the last.
         (await un)();
         (await unLink)();
-        await invoke('close_all');
       }
     },
   };
 }
+
+/** Close every native link. Called by the shell BEFORE opening a new device — one link at a
+ *  time is the model, and closing first is what guarantees the close cannot land on the
+ *  successor. The one Tauri invoke the screen needs by name, kept here with the others. */
+export const closeLinks = (): Promise<void> => invoke('close_all');
 
 /** Condor, or any instrument speaking NMEA over TCP. Condor's default is port 4353 — on the
  *  same PC (127.0.0.1) or on the PC's LAN address from a tablet. */
