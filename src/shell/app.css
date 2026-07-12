@@ -44,6 +44,25 @@ button { cursor: pointer; }
 .goal-label { font-variant-numeric: tabular-nums; }
 .goal-hint { color: var(--dim); font-weight: 400; }
 
+/* ---- FLM: the traffic panel. Alarm colours are FLARM's own scale; FLM-005's sentence is
+   part of the panel, not a footnote to lose. ---- */
+.flarm { margin-top: 1rem; padding: .6rem .8rem; border-radius: .5rem; background: #151920; font-size: .85rem; }
+.flarm.alarm-2 { outline: 2px solid var(--warn); }
+.flarm.alarm-3 { outline: 2px solid var(--bad); }
+.flarm-status { font-weight: 600; }
+.flarm.alarm-2 .flarm-status { color: var(--warn); }
+.flarm.alarm-3 .flarm-status { color: var(--bad); }
+.traffic-row { font-variant-numeric: tabular-nums; color: var(--dim); }
+.traffic-row.alarm-2 { color: var(--warn); }
+.traffic-row.alarm-3 { color: var(--bad); }
+.see-avoid { margin-top: .3rem; font-size: .75rem; color: var(--dim); font-style: italic; }
+
+/* ---- ESP-003: the two verdicts never share a colour. ---- */
+.airspace { margin-top: .75rem; font-size: .9rem; }
+.asp-row { padding: .35rem .6rem; border-radius: .35rem; margin-top: .25rem; font-weight: 600; }
+.asp-row.inside { background: rgba(224, 82, 82, .18); color: var(--bad); }
+.asp-row.predicted { background: rgba(224, 160, 48, .15); color: var(--warn); }
+
 /* ---- WX-005: the sandbox must never pass for a sky. Banner and outline, both from the
    .sandbox class briefingHtml derives from the DATA. ---- */
 .sandbox-banner { background: var(--sandbox); color: #fff; font-weight: 700; letter-spacing: .1em; padding: .4rem .8rem; border-radius: .35rem; margin: .75rem 0; }

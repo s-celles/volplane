@@ -19,6 +19,9 @@ import { igcToSentences } from '../core/replay';
 import { derive, rollingVario } from '../core/compute';
 import { speedToFly, arrival } from '../core/glide';
 import { windEstimator } from '../core/wind';
+import { parsePflau, parsePflaa, trafficStore, SEE_AND_AVOID, type FlarmStatus } from '../core/flarm';
+import { igcLogger, type IgcLogger } from '../core/igclog';
+import { parseOpenAir, incursions, type Airspace } from '../core/airspace';
 import { completeness, type PackSpec, type Held } from '../core/pack';
 import { briefingAt, sandboxWx, type Provenance } from '../core/briefing';
 import { computeLiftMap, calibrateFromTrack, type LiftMap } from '../core/liftmap';
@@ -98,6 +101,9 @@ app.innerHTML = `
     <label>reserve <input id="set-reserve" size="4" value="200" inputmode="numeric" /> m</label>
     <button id="set-goal" type="button" title="make the current position and ground the final-glide goal">goal: here</button>
     <span id="goal-label" class="goal-label">no goal</span>
+    <button id="rec" type="button" title="record the flight as an IGC file (LOG)">● record</button>
+    <label class="replay">airspace (OpenAir) <input id="oa" type="file" accept=".txt,.openair" /></label>
+    <span id="oa-label" class="goal-label"></span>
   </form>
   <form id="connect">
     <select id="linksel">${offered.map(l => `<option value="${l}">${l.toUpperCase()}</option>`).join('')}</select>
@@ -137,6 +143,12 @@ const estimator = windEstimator();                 // VEN-001: OUR wind, never m
 const avgVario = rollingVario(30);                 // POS-006
 let goal: { lon: number; lat: number; elev: number } | null = null;
 
+// ---- Phase 4: traffic, the logger, the airspace ----
+const traffic = trafficStore();                    // FLM: the picture, aged on read
+let flarm: FlarmStatus | null = null;              // FLM: the instrument's own judgement
+let logger: IgcLogger | null = null;               // LOG: recording when non-null
+let spaces: Airspace[] = [];                       // ESP: what the loaded file holds
+
 const setting = (id: string, fallback: number): number => {
   const v = Number((app.querySelector(id) as HTMLInputElement).value);
   return Number.isFinite(v) ? v : fallback;
@@ -146,6 +158,38 @@ const setting = (id: string, fallback: number): number => {
  *  our inference from circle drift, not the instrument's measurement, and the two must never
  *  wear the same label. */
 const EST_BADGE = ' <span class="badge estimated" title="from circle drift — an estimate, not the instrument">est</span>';
+
+/** FLM: the alarm and the picture, never without FLM-005's sentence. Shown only once a
+ *  FLARM has spoken — a permanently empty traffic panel would teach the eye to skip it. */
+function flarmHtml(s: NavState): string {
+  if (!flarm) return '';
+  const pic = traffic.picture(s.fix?.sod ?? 0);
+  const rows = pic.slice(0, 5).map(t => {
+    const dist = Math.hypot(t.relNorth, t.relEast);
+    const vert = t.relVertical != null ? `${t.relVertical > 0 ? '+' : ''}${t.relVertical.toFixed(0)} m` : '—';
+    return `<div class="traffic-row alarm-${t.alarm}">${t.id} · ${(dist / 1000).toFixed(1)} km · ${vert}${
+      t.climbRate != null ? ` · ${t.climbRate.toFixed(1)} m/s` : ''}</div>`;
+  }).join('');
+  return `<div class="flarm alarm-${flarm.alarm}">
+    <div class="flarm-status">FLARM${flarm.alarm ? ` — ALARM ${flarm.alarm}${
+      flarm.bearing != null ? `, ${flarm.bearing > 0 ? '+' : ''}${flarm.bearing}°` : ''}${
+      flarm.relDistance != null ? `, ${flarm.relDistance} m` : ''}` : ` — ${flarm.rx} heard`}</div>
+    ${rows}
+    <div class="see-avoid">${SEE_AND_AVOID}</div>
+  </div>`;
+}
+
+/** ESP: the verdicts for now. 'inside' and 'predicted' never share a colour (ESP-003), and a
+ *  worst-cased vertical says so in words (ESP-005). */
+function airspaceHtml(s: NavState): string {
+  if (!spaces.length || !s.fix) return '';
+  const inc = incursions(spaces, s.fix.lon, s.fix.lat, s.fix.alt ?? null, s.track, s.groundSpeed);
+  if (!inc.length) return '';
+  return `<div class="airspace">${inc.map(i =>
+    `<div class="asp-row ${i.kind}">${i.kind === 'inside' ? 'INSIDE' : 'AHEAD 60 s'} — ${
+      i.space.class} ${i.space.name}${i.worstCase ? ' (altitude unknown: worst case assumed)' : ''}</div>`,
+  ).join('')}</div>`;
+}
 
 function render(s: NavState, link: LinkState): void {
   const mc = setting('#set-mc', 1);
@@ -194,6 +238,8 @@ function render(s: NavState, link: LinkState): void {
       ${goal ? box(`Arrival <span class="goal-hint" title="${windUsed}">▸ goal</span>`,
                    fmt(arr && arr.height), 'm') : ''}
     </div>
+    ${flarmHtml(s)}
+    ${airspaceHtml(s)}
     <div class="link ${link.state}">Link: ${link.state}${
       link.state === 'closed' && link.error ? ` — ${link.error}` : ''
     }${stale ? ' — values are the LAST RECEIVED, not current' : ''}</div>
@@ -229,6 +275,38 @@ function render(s: NavState, link: LinkState): void {
   render(state, link);
 };
 app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => render(state, link);
+(app.querySelector('#rec') as HTMLButtonElement).onclick = e => {
+  const btn = e.target as HTMLButtonElement;
+  if (!logger) {
+    logger = igcLogger({ day: new Date().toISOString().slice(0, 10) });
+    btn.textContent = '■ stop & save';
+    return;
+  }
+  // Stop and hand the file over — a Blob download works in every webview the shell targets,
+  // and the log survives even if the app dies a second later (SYS-001's spirit for Phase 4;
+  // continuous on-disk journaling is the recovery story's own work).
+  const igc = logger.file();
+  const n = logger.count();
+  logger = null;
+  btn.textContent = '● record';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([igc], { type: 'application/octet-stream' }));
+  a.download = `volplane-${new Date().toISOString().slice(0, 10)}.igc`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  (app.querySelector('#oa-label') as HTMLElement).textContent = `saved ${n} fixes`;
+};
+(app.querySelector('#oa') as HTMLInputElement).onchange = async e => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  const { spaces: loaded, refused } = parseOpenAir(await f.text());
+  spaces = loaded;
+  // ESP-001's display starts as words; the map (CAR) will draw them. Refusals are COUNTED
+  // out loud — a volume silently dropped is a TMA the pilot thinks is loaded.
+  (app.querySelector('#oa-label') as HTMLElement).textContent =
+    `${loaded.length} volumes loaded${refused ? `, ${refused} refused` : ''}`;
+  render(state, link);
+};
 
 let state: NavState = EMPTY;
 let link: LinkState = { state: 'idle' };
@@ -259,7 +337,22 @@ async function run(dev: Device): Promise<void> {
   });
   // The whole flight computer, in one expression: a stream of sentences, a terrain sampler,
   // a driver. It does not know that Tauri, or a TCP socket, or Condor exist.
-  const it = navigate(lines(watched), elev, driver)[Symbol.asyncIterator]();
+  // The FLARM tap: PFLAU/PFLAA ride the same NMEA stream but are not navigation — nmea.ts
+  // rightly ignores them. This tee reads them BEFORE navigate, so one stream feeds both the
+  // position and the picture, and a replay with FLARM lines replays the traffic too.
+  async function* tee(src: AsyncIterable<string>): AsyncIterable<string> {
+    for await (const line of src) {
+      if (line.startsWith('$PFLAU')) {
+        const st = parsePflau(line);
+        if (st) flarm = st;
+      } else if (line.startsWith('$PFLAA')) {
+        const t = parsePflaa(line, state.fix?.sod ?? 0);
+        if (t) traffic.add(t);
+      }
+      yield line;
+    }
+  }
+  const it = navigate(tee(lines(watched)), elev, driver)[Symbol.asyncIterator]();
   stopCurrent = () => void it.return?.();
   for (;;) {
     const { value, done } = await it.next();
@@ -271,6 +364,7 @@ async function run(dev: Device): Promise<void> {
       // fix's own seconds — a replay must average exactly as the live flight did.
       if (state.fix.alt != null) estimator.add(state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod);
       if (state.vario != null) avgVario.add(state.fix.sod, state.vario);
+      logger?.add(state);                          // LOG: every fix, once per second
     }
     render(state, link);
   }
