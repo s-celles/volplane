@@ -6,6 +6,8 @@
 
 # Allowlisted source / config / docs (by extension or exact name).
 !*.ts
+!*.html
+!*.css
 !*.rs
 !*.toml
 !*.json

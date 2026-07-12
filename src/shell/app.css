@@ -1,0 +1,19 @@
+/* IHM-004: readable in direct sunlight. High contrast, big numbers, no decoration. */
+:root { color-scheme: dark; --bg:#0b0d10; --fg:#e8eaed; --dim:#8b93a1; --warn:#e0a030; --bad:#e05252; }
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, sans-serif; }
+#app { padding: 1.5rem; max-width: 46rem; }
+h1 { font-size: 1rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin-bottom: 1.25rem; }
+.boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; }
+.box { background: #151920; border-radius: .5rem; padding: .75rem 1rem; }
+.box .k { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.box .v { font-size: 2rem; font-variant-numeric: tabular-nums; font-weight: 600; }
+.box .u { font-size: .9rem; color: var(--dim); margin-left: .25rem; }
+/* An unknown value is shown as unknown. It is never shown as zero. */
+.box.unknown .v { color: var(--dim); }
+.link { margin-top: 1.25rem; font-size: .85rem; color: var(--dim); }
+.link.silent { color: var(--warn); }
+.link.closed { color: var(--bad); }
+form { margin-top: 1.5rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+input, button { font: inherit; padding: .45rem .7rem; border-radius: .35rem; border: 1px solid #2a313c; background: #151920; color: var(--fg); }
+button { cursor: pointer; }
