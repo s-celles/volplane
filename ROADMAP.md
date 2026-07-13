@@ -1,6 +1,6 @@
 # VOLPLANE — roadmap
 
-A free soaring flight computer. Requirements: [`spec-volplane.md`](../spec-volplane.md) (v0.3, in French).
+A free soaring flight computer. Requirements: [`spec-volplane.md`](../spec-volplane.md) (**v0.4**, in French).
 
 ---
 
@@ -236,22 +236,21 @@ The phases are flown and the app is **not finished**. Two different kinds of gap
 
 This is the more interesting list, because these are holes in the *requirements*, not in the code. Ranked by how much a pilot would miss them.
 
-> **① Waypoints and landable fields — and they are ONE thing.**
-> The spec has turnpoints inside `TSK` and a passing mention in `CAR-005`, but **no requirement family for waypoint FILES at all** — no `.cup` (SeeYou), no `.dat`/`.wpt`. That is a plain omission: `.cup` is the format the whole gliding world exchanges.
+> **① Landable fields — "where can I land RIGHT NOW".** ✅ *Specced in v0.4 as the `LND` family; still to build.*
 >
-> And the sting is this: **a `.cup` file IS the landable-fields database.** Its `style` column codes exactly what a pilot needs when the day goes wrong — *airfield, grass strip, outlanding field, gliding site* — with the runway, the frequency and the elevation beside it. So the missing waypoint requirement and the missing **"where can I land RIGHT NOW"** requirement are the same missing requirement.
+> A correction first, because a roadmap that flatters its own author is worth nothing. The first draft of this section claimed the spec had **no waypoint requirements at all**. That was **wrong**, and the amendment work found it out: `TSK-001` already demands an imported turnpoint database *with type, frequency and runway*; `TSK-010` demands the points of interest drawn with a symbology per type; and `CFG-007` **names the SeeYou `.cup` format explicitly**. The waypoints were there all along.
 >
-> Every competitor has this — XCSoar, LK8000, XCTrack, SeeYou Navigator all show landables coloured by reachability (green: within glide; red: not) and an *alternates / abort* list sorted by how comfortably you get there. **We do not, and the spec does not even ask.** It is the one safety-critical hole in the whole document.
+> The real hole was narrower — and worse. **Nothing, anywhere, asked whether a landable field is still within glide.** The document knew how to *import* the fields and how to *draw* them, and never once asked the question a pilot asks when the day goes wrong. Every competitor answers it: XCSoar, LK8000, XCTrack and SeeYou Navigator colour landables by reachability (green: within glide; red: not) and offer an *alternates* list sorted by arrival margin. That was the one safety-critical omission in the whole spec — narrower than "waypoints are missing", and far more dangerous, because everything around it looked finished.
 >
-> The machinery already exists: `core/reach.ts`'s `reachableTo()` answers *"can I get there, and is a ridge in the way"* for an arbitrary point. What is missing is the **database** to point it at, and a sorted list. Proposed: a new `LND` requirement family, fed by a `WPT` one.
+> **Spec v0.4 closes it: the `LND` family, nine requirements, five of them `Must`.** The machinery is already in hand — `core/reach.ts`'s `reachableTo()` answers *"can I get there, and is a ridge in the way"* for any point. What is left to build is the `.cup` parser, the landable filter and the sorted list — plus the honesty rule `LND-003` now writes down: a field whose reachability is **indeterminate** (terrain not loaded) must **never** be shown as reachable.
 
-> **② Live tracking / OGN.** Absent. The spec's `FLM` assumes a FLARM *device* in the cockpit. But OGN relays FLARM positions over the internet, which buys two things a FLARM cannot: being **seen** by the ground (and by rescue), and **seeing traffic with no FLARM aboard at all**. And the pipeline is already in this monorepo — **`ogn-3d-viewer` speaks OGN today.**
+> **② Live tracking / OGN.** ✅ *Specced in v0.4 as the `TRK` family; still to build.* The spec's `FLM` assumed a FLARM *device* in the cockpit. But OGN relays FLARM positions over the internet, which buys two things a FLARM cannot: being **seen** by the ground (and by rescue), and **seeing traffic with no FLARM aboard at all**. And the pipeline is already in this monorepo — **`ogn-3d-viewer` speaks OGN today.**
 
-> **③ A terrain-ahead alarm.** `TER-005` teaches the app to *distinguish* unreachable ground; nothing asks it to **shout**. XCSoar says "TERRAIN". We have the data (measured, not modelled — so `C3` does **not** forbid the alert) and we have the audio. Only the requirement is missing.
+> **③ A terrain-ahead alarm.** ✅ *Specced in v0.4 as `TER-008`.* `TER-005` taught the app to *distinguish* unreachable ground; nothing asked it to **shout**. XCSoar says "TERRAIN". We have the data (measured, not modelled — so `C3` does **not** forbid the alert) and we have the audio. Only the requirement is missing.
 
-> **④ A logbook.** The flights flown, the statistics of a season. Absent from the spec.
+> **④ A logbook.** ✅ *Specced in v0.4 as `LOG-006`.* The flights flown, the statistics of a season.
 
-> **⑤ ENL / motorgliders.** Engine-noise level, engine-run and self-launch detection. Absent — and it decides IGC validity and scoring for a large slice of the fleet.
+> **⑤ ENL / motorgliders.** ✅ *Specced in v0.4 as `LOG-007`.* Engine-noise level and engine-run detection — it decides IGC validity and scoring for a large slice of the fleet.
 
 Below those: ballast/bugs adjusting the polar **in flight** (`CFG-001` names the mass but never asks for the in-flight knob); competition start procedures (start gates, PEV starts); importing the forecasts pilots actually use (RASP, SkySight, TopMeteo — we model our own potential but ingest none of theirs); spoken announcements; and automatic airspace updates from openAIP.
 

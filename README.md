@@ -24,7 +24,7 @@ skeleton walks, briefs, glides, listens, scores and sings:
 **Phase 5 (iOS) stays deferred by decision D2** — it is a product choice (BLE, like SeeYou
 Navigator, or network-only, like XCSoar), not a backlog item.
 
-- Requirements: [`spec-volplane.md`](../spec-volplane.md) (v0.3, French)
+- Requirements: [`spec-volplane.md`](../spec-volplane.md) (v0.4, French)
 - Plan: [`ROADMAP.md`](ROADMAP.md)
 - Kernel: [`soaring-core`](https://github.com/s-celles/soaring-core)
 
