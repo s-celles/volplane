@@ -6,7 +6,7 @@
       "name": "volplane",
       "dependencies": {
         "soaring-core": "github:s-celles/soaring-core#v0.6.0",
-        "soaring-data": "github:s-celles/soaring-data#v0.3.0",
+        "soaring-data": "github:s-celles/soaring-data#v0.4.0",
         "upng-js": "^2.1.0",
       },
       "devDependencies": {
@@ -54,7 +54,7 @@
 
     "soaring-core": ["soaring-core@github:s-celles/soaring-core#5faea65", {}, "s-celles-soaring-core-5faea65", "sha512-z/NAfwvnIHXOGGGnMq4jKznRyK3Fp2JZjzwPytrATf96PlxFAg54V/JpwRycTGscwdKvYNFc0724wQkD9QUUVg=="],
 
-    "soaring-data": ["soaring-data@github:s-celles/soaring-data#24c342a", {}, "s-celles-soaring-data-24c342a", "sha512-DA9mDHvmAKKKToMIeDw3ZYYTk1DKvF3GznRQ4zt1y2xtcV5/4ymYFIPhVjLmxcIawORPsZXQjVoUjlvBi5RxzQ=="],
+    "soaring-data": ["soaring-data@github:s-celles/soaring-data#5229291", {}, "s-celles-soaring-data-5229291", "sha512-dIo8PA8JvVYX+Rg7jL//LLmNeuS9LzvGz5w3Jd9eyTtvon1KPo9Xf+r8BOAlYginQ8rsibkLgi5FjLf765JYKQ=="],
 
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
