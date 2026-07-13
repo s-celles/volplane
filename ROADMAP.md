@@ -4,19 +4,59 @@ A free soaring flight computer. Requirements: [`spec-volplane.md`](../spec-volpl
 
 ---
 
+## This document was lying, and here is what it said
+
+Until today it opened with: *"NMEA acquisition, a MacCready glide solver, airspace, FAI tasks, FLARM,
+IGC logging — **none of it exists here**."* Every one of those has been built. It also listed as
+missing the terrain shading, the InfoBoxes, the units, the translation catalogue, the polar library
+and the circling assistant. All six are in the tree.
+
+A roadmap that flatters its author is worth nothing — and a roadmap that is merely *out of date* is
+worse than one that is wrong, because a wrong plan gets argued with while a stale one gets believed.
+So the numbers below come from an audit of the code against the spec's 126 requirements, not from
+memory.
+
+---
+
 ## Where we actually stand
 
-Two facts, from the state-of-the-art review in §7bis of the spec, decide everything below. They pull in opposite directions.
+**Sixty-six of the spec's sixty-nine `Must` requirements are built.** Three are not, and they are
+named below. The `soaring-core` kernel holds the soaring domain (C4); this repository holds the
+application.
 
-**1. The MVP is made of things everyone already has.** NMEA acquisition, a MacCready glide solver, airspace, FAI tasks, FLARM, IGC logging: XCSoar, LK8000, XCTrack and TopHat all have them. **None of it exists here** — not in this repo, not in `soaring-core`.
+| | in `soaring-core` | in `volplane` |
+|---|---|---|
+| **the air** | polars, MacCready, netto, wind from circle drift, the four lift fields | the screens that show them |
+| **the ground** | terrain sampling, hillshade, the reach march | `map-ui` paints it |
+| **the sound** | the vario law, the alarm voice (a warble no vario can imitate) | the oscillator |
+| **the data** | `.cup` / WinPilot parsing, `.plr` polars | 154 wings from `soaring-data` |
 
-**2. `soaring-core` holds the exact opposite.** Terrain, atmosphere, ephemeris, polars, flight maths, air-mass detection from tracks, and the **four predicted lift fields** that *nobody else* has. In the spec those are *Should* and *Could*. So the kernel holds the **differentiator** and none of the **foundation**.
+Built and under test: NMEA and FLARM acquisition, the glide computer, airspace (a real national file,
+1608 volumes), FAI tasks with sector validation, IGC logging, the reach polygon that walls off a
+mountain, landable fields sorted by arrival margin, terrain shading, the cross-section, the circling
+assistant, configurable InfoBoxes on pages the pilot builds, units per quantity, English and French,
+and a glider library of 154 wings — 107 of them carrying their Wikidata item and 55 the wingspan
+their EASA type certificate states.
 
-The tempting conclusion is that six months of rebuilding the foundation must come before anything is visible. **That is wrong, and it is the pivot of this roadmap:**
+**551 tests pass.**
 
-> **The GROUND half of VOLPLANE — provisioning, briefing, offline completeness — needs no instrument, no airspace and no task.** It rests almost entirely on what `soaring-core` already computes. It ships **first**, it is **verifiable**, and it is **useful** before a single NMEA sentence has been parsed.
+---
 
-It is also where `OFF-003` and `OFF-010` live — the module the spec calls its **priority**.
+## And the thing 551 tests cannot tell us
+
+> **Nobody has looked at it.**
+
+Since the blank-screen bug of the first day, every screen — the map, the InfoBoxes, the settings
+panel, the glider picker, the French interface, the vario sound — has been verified by tests written
+by the same process that wrote the code. That is a circle. No human eye has been on the display.
+
+A flight computer that passes 551 tests and is unreadable in a cockpit is worth nothing, and no test
+will ever say so. Two things are already visible from the code without running it:
+
+- the glider picker offers a group of **106 entries** in one list — in flight, with gloves;
+- nothing has ever been checked for legibility in sunlight, or for reach with a thumb.
+
+**This is the largest risk in the project.** It is larger than every gap listed below.
 
 ---
 
@@ -211,55 +251,36 @@ Still open here: **`TER-006`** (3D synthetic vision) and **`OFF-012`** (standalo
 
 ## What is actually left
 
-The phases are flown and the app is **not finished**. Two different kinds of gap, and conflating them is how a roadmap starts lying.
+Three `Must` requirements, and they are not obscure.
 
-### 1. The spec asks for it, and we have not built it
-
-**The one that matters most, and it is a `Must`: the map does not draw the terrain (`TER-001`).** The canvas paints airspace, the reach polygon, the trail, the glider, traffic — and **no ground at all**. It is a black screen with lines on it. We decode the DEM tiles already, and we march them for the reach; what is missing is literally the painter. This is the largest gap between what the app *does* and what it *looks like it does*.
+### The three `Must`
 
 | | Requirement | What is missing |
 |---|---|---|
-| **M** | `TER-001` | **terrain shading on the map** — see above |
-| **M** | `TSK-007` | remaining distance, ETA, speed on task — the task ribbon shows what is *validated*, never what is *left* |
-| **M** | `IHM-001`, `IHM-002` | **configurable** InfoBoxes; pages per flight phase (the boxes are hard-coded) |
-| **M** | `CFG-002`, `CFG-003` | a polar library; **units per quantity** (18 hard-coded km/h and m conversions) |
-| **M** | `IHM-006` | i18n — no translation catalogue exists |
-| **M** | `VAR-006` | the average of the last thermal and the last circle |
-| **M** | `FLM-002` | the collision alert is visual only — the audio half is missing, though the oscillator exists |
-| **M** | `TSK-002` | composing a task **in the app** (today: import a CSV, nothing else) |
-| **M** | `CAR-002`, `CAR-005` | map orientations (track-up / heading-up / north-up); waypoints and the task drawn on the map |
-| **S** | `THE-001`, `THE-002` | **the circling assistant** — where in the turn the lift is strongest. A flagship feature of every competitor, already in the spec, and `soaring-core` has the circling detection it needs |
-| **S** | `POS-007/008`, `PLA-006`, `PLA-008`, `VEN-002`, `CAR-004`, `CAR-006`, `CFG-004`, `CFG-006`, `SYS-003`, `LOG-005` | takeoff/landing detection; required vs achieved L/D; auto-MC from the climb history; manual wind; auto-zoom while circling; trail coloured by climb; profiles; config import/export; battery warning; replay at a **chosen** speed (fixed at 10× today) |
-| **C** | `TER-006`, `OFF-012`, `ACQ-008`, `ACQ-009`, `LOG-004`, `THE-003` | 3D synthetic vision; standalone install; send MC/QNH *to* the device; internal sensors; the IGC G-record; the thermal band |
+| **M** | `CAR-005` | **the task and the waypoints are not drawn on the map.** `map-ui.ts` has no notion of either. It paints terrain, airspace, landables, landmarks, the trail, the glider, traffic and the reach polygon — and not one turnpoint. The task EXISTS (`core/task.ts`), it is validated, its ribbon is rendered at the top of the screen — and the pilot cannot **see** it. This is the widest gap between what the app does and what it looks like it does. |
+| **M** | `TSK-002` | **a task cannot be composed in the app.** `task-ui.ts` renders a ribbon and nothing else; a task arrives by import or not at all. With `TSK-008` (edit in flight), `TSK-009` (geometry validity) and `TSK-011` (goto). |
+| **M** | `CAR-002` | **map orientations** — track-up, heading-up, north-up. The map is north-up and has no idea there is a choice. |
 
-### 2. The competition has it and **the spec never asks for it**
+### The `Should` list, ranked by what a pilot would miss
 
-This is the more interesting list, because these are holes in the *requirements*, not in the code. Ranked by how much a pilot would miss them.
+1. **`TRK-001…005` — OGN live tracking.** The whole family. Being *seen* by the ground and by rescue, and seeing traffic with no FLARM aboard. The pipeline is already in this monorepo: **`ogn-3d-viewer` speaks OGN today.**
+2. **`CAR-006`** — the trail coloured by climb rate. Cheap, and it is how a pilot reads the day.
+3. **`PLA-008`** — automatic MacCready from the climb history. **`PLA-006`** — required versus achieved glide ratio.
+4. **`POS-007/008`** — takeoff and landing detection; **`LOG-006`** — a logbook; **`LOG-007`** — ENL, which decides IGC validity for a large slice of the fleet.
+5. **`CFG-008`** — ballast and bugs adjusted **in flight**. `CFG-001` names the masses; nothing lets the pilot turn the knob.
+6. **`VEN-002`** (manual wind), **`CFG-004`** (profiles), **`CFG-006`** (config import/export), **`SYS-003`** (battery), **`LOG-005`** (replay at a chosen speed — fixed at 10× today), **`CAR-003/004`** (zoom, auto-zoom while circling), **`IHM-003/005`** (gestures, no keyboard), **`FLM-003`** (buddy names), **`POS-004`** (QNH estimated), **`TER-004`** (topographic density by scale), **`THE-003`** (the thermal band).
 
-> **① Landable fields — "where can I land RIGHT NOW".** ✅ *Specced in v0.4 as the `LND` family; still to build.*
->
-> A correction first, because a roadmap that flatters its own author is worth nothing. The first draft of this section claimed the spec had **no waypoint requirements at all**. That was **wrong**, and the amendment work found it out: `TSK-001` already demands an imported turnpoint database *with type, frequency and runway*; `TSK-010` demands the points of interest drawn with a symbology per type; and `CFG-007` **names the SeeYou `.cup` format explicitly**. The waypoints were there all along.
->
-> The real hole was narrower — and worse. **Nothing, anywhere, asked whether a landable field is still within glide.** The document knew how to *import* the fields and how to *draw* them, and never once asked the question a pilot asks when the day goes wrong. Every competitor answers it: XCSoar, LK8000, XCTrack and SeeYou Navigator colour landables by reachability (green: within glide; red: not) and offer an *alternates* list sorted by arrival margin. That was the one safety-critical omission in the whole spec — narrower than "waypoints are missing", and far more dangerous, because everything around it looked finished.
->
-> **Spec v0.4 closes it: the `LND` family, nine requirements, five of them `Must`.** The machinery is already in hand — `core/reach.ts`'s `reachableTo()` answers *"can I get there, and is a ridge in the way"* for any point. What is left to build is the `.cup` parser, the landable filter and the sorted list — plus the honesty rule `LND-003` now writes down: a field whose reachability is **indeterminate** (terrain not loaded) must **never** be shown as reachable.
+### `Could`
 
-> **② Live tracking / OGN.** ✅ *Specced in v0.4 as the `TRK` family; still to build.* The spec's `FLM` assumed a FLARM *device* in the cockpit. But OGN relays FLARM positions over the internet, which buys two things a FLARM cannot: being **seen** by the ground (and by rescue), and **seeing traffic with no FLARM aboard at all**. And the pipeline is already in this monorepo — **`ogn-3d-viewer` speaks OGN today.**
-
-> **③ A terrain-ahead alarm.** ✅ *Specced in v0.4 as `TER-008`.* `TER-005` taught the app to *distinguish* unreachable ground; nothing asked it to **shout**. XCSoar says "TERRAIN". We have the data (measured, not modelled — so `C3` does **not** forbid the alert) and we have the audio. Only the requirement is missing.
-
-> **④ A logbook.** ✅ *Specced in v0.4 as `LOG-006`.* The flights flown, the statistics of a season.
-
-> **⑤ ENL / motorgliders.** ✅ *Specced in v0.4 as `LOG-007`.* Engine-noise level and engine-run detection — it decides IGC validity and scoring for a large slice of the fleet.
-
-Below those: ballast/bugs adjusting the polar **in flight** (`CFG-001` names the mass but never asks for the in-flight knob); competition start procedures (start gates, PEV starts); importing the forecasts pilots actually use (RASP, SkySight, TopMeteo — we model our own potential but ingest none of theirs); spoken announcements; and automatic airspace updates from openAIP.
+`TER-006` (3D synthetic vision), `OFF-012` (standalone install), `ACQ-008/009` (send MC/QNH *to* the device; internal sensors), `LOG-004` (the IGC G-record), `LND-009` (divert mode).
 
 ### The order I would take them
 
-1. **`TER-001` — the terrain on the map.** A `Must`, the bricks are all in hand, and it closes the widest gap between the app and its own appearance.
-2. **Waypoints + landables (`.cup`).** Amend the spec first (a `WPT` family and an `LND` family), then build on `reachableTo`. This is the safety hole, and it is the one thing a competitor has that we would be embarrassed to lack.
-3. **The rest of the `Must` list** — `TSK-007`, `VAR-006`, the FLARM audio, units, i18n.
-4. **The circling assistant (`THE-001/002`)** — the highest-value `Should`, and the kernel is ready for it.
+0. **Fly it.** See above. Before anything.
+1. **`CAR-005`** — put the task on the map. The pieces are all in hand and it closes the widest gap.
+2. **`TSK-002`** — compose a task in the app. It is the last `Must` a pilot would notice.
+3. **`CAR-002`** — orientations.
+4. **OGN (`TRK`)** — the highest-value `Should`, and the code exists next door.
 
 ---
 
@@ -278,19 +299,31 @@ The spec (§9) asks for **quantified acceptance criteria**. The principle:
 
 > **Every phase ends in a claim that can be checked, not a list of ticked boxes.**
 
-| Phase | The claim | |
-|---|---|---|
-| 0 | Fly in Condor, live, and the height above ground is right. | ✅ 1502 m alt over 944 m of Napf: 558 m AGL, falling as the ground rises |
-| 1 | Cut the network: the day's briefing holds, and the pilot knows what is missing. | ✅ provisioned, `fetch` killed, briefing intact off the disk |
-| 2 | In Condor, our estimated wind matches the wind the simulator actually applied. | ✅ truth 270°/20 km/h → estimate 270.3°/19.9; netto to 0.004 m/s |
-| 3 | A FLARM in the cockpit feeds the computer, and unplugging it does not kill it. | ✅ a dead source ages the values, visibly; the app lives |
-| 4 | An FAI task validates under the rules actually in force. | ✅ START → TP1 → FINISH, in order, under `fai-2024` |
-| 6 | The reach is not a circle, and the difference is a mountain. | ✅ from 1200 m, 20 of 36 bearings walled off where the circle promised 9 km |
+| The claim | |
+|---|---|
+| Fly in Condor, live, and the height above ground is right. | ✅ 1502 m alt over 944 m of Napf: 558 m AGL, falling as the ground rises |
+| Cut the network: the day's briefing holds, and the pilot knows what is missing. | ✅ provisioned, `fetch` killed, briefing intact off the disk |
+| In Condor, our estimated wind matches the wind the simulator actually applied. | ✅ truth 270°/20 km/h → estimate 270.3°/19.9; netto to 0.004 m/s |
+| A FLARM in the cockpit feeds the computer, and unplugging it does not kill it. | ✅ a dead source ages the values, visibly; the app lives |
+| An FAI task validates under the rules actually in force. | ✅ START → TP1 → FINISH, in order, under `fai-2024` |
+| The reach is not a circle, and the difference is a mountain. | ✅ from 1200 m, 20 of 36 bearings walled off where the circle promised 9 km |
+| The app names the field it can still reach, and the one it cannot. | ✅ alternates sorted by arrival margin; an indeterminate field is never shown as reachable |
 
-And the check that matters most, at every phase: **the forced-offline test** (§9). Pull the network and fly. It is the only way to find out whether `OFF-001` is true.
+Every one of those was checked **by a test**. Not one was checked **by a pilot**.
 
-**The claim the next phase owes:** *the app names the field it can still reach, and the one it cannot.* That is the `WPT`/`LND` work above, and it is the only acceptance test on this page a pilot's life could depend on.
+> **The claim the next phase owes, and it is not a computation:**
+> *a human opens the app, flies a Condor task with it, and can read it.*
+>
+> Every claim above is a number that a machine verified against another number. This one cannot be
+> automated, has never been attempted, and is the only one that decides whether any of the others
+> matter. Until it is met, this project has 551 passing tests and no evidence that it is a flight
+> computer.
+
+And the check that matters most, at every phase: **the forced-offline test** (§9). Pull the network
+and fly. It is the only way to find out whether `OFF-001` is true.
 
 ---
 
-_A roadmap is a plan, not a promise. Parts of it will be wrong; the point is that they be wrong **visibly**._
+_A roadmap is a plan, not a promise. Parts of it will be wrong; the point is that they be wrong
+**visibly** — and that it never again be merely **stale**, which is how a plan lies without anyone
+noticing._
