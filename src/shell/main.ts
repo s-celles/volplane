@@ -31,6 +31,7 @@ import {
   type Task, type TaskProgress, type Waypoint, type AatProgress,
 } from '../core/task';
 import { reachable, type ReachRay } from '../core/reach';
+import { parsePeaks, parseShapes } from '../core/landmarks';
 import { parsePoiFile, isLandable, LANDABLE_CATS, type Poi, type PoiCat } from '../core/cup';
 import { alternates, landablesWithin, DEFAULT_RADIUS_M, type Alternate } from '../core/landables';
 import { alternatesHtml, styleFilterHtml } from './landables-ui';
@@ -67,6 +68,10 @@ import { MIN_RATIOS } from 'soaring-core/lift/calib';
 import { LIFT_COMPS } from 'soaring-core/lift/mix';
 import type { Wx, WxKnobs } from 'soaring-core/weather';
 import type { TrackPoint } from 'soaring-core/types';
+import peaksCsv from 'soaring-data/datasets/landmarks/peaks.csv' with { type: 'text' };
+import coastlineGeo from 'soaring-data/datasets/landmarks/coastline.geojson' with { type: 'json' };
+import bordersGeo from 'soaring-data/datasets/landmarks/borders.geojson' with { type: 'json' };
+import lakesGeo from 'soaring-data/datasets/landmarks/lakes.geojson' with { type: 'json' };
 
 // The cache under everything (OFF-002), opened before the terrain store exists because the
 // store's very first read may already be a disk hit. openStore never throws — worst case the
@@ -265,6 +270,17 @@ let taskProgress: TaskProgress | null = null;
 let aat: AatProgress | null = null;                // TSK: best scoring fixes per assigned area
 const trail: [number, number][] = [];              // CAR: the recent track
 let mapWidthM = 20_000;                            // CAR: zoom, metres across the canvas
+
+// The world, minimally — parsed ONCE, at startup, from the Frictionless package bundled into the
+// build. It costs 220 KB and no network at all: a pilot who has never had a connection still
+// knows where on the planet he is (OFF-001). It is a frame for the eye, NOT a database of places
+// to go — soaring-data ships it precisely because a coastline does not move and an aerodrome does.
+const landmarks = {
+  coastline: parseShapes(coastlineGeo),
+  borders: parseShapes(bordersGeo),
+  lakes: parseShapes(lakesGeo),
+  peaks: parsePeaks(peaksCsv),
+};
 let audio: AudioOut | null = null;                 // VAR-004/005: null = silent, and it SAYS so
 // LND: the fields the pilot loaded, the ones he wants to see, and core's verdict on them for
 // THIS fix. `cup` is the file; `styleFilter` is a view filter — null means every landable
@@ -375,7 +391,7 @@ function repaintMap(s: NavState, stale: boolean): void {
   }
   paintMovingMap(ctx, view, {
     state: s, trail, spaces, traffic: traffic.picture(s.fix?.sod ?? 0),
-    goal: goal ? { lon: goal.lon, lat: goal.lat } : null, rangeM, reach,
+    goal: goal ? { lon: goal.lon, lat: goal.lat } : null, rangeM, reach, landmarks,
     // TER-001: the ground goes UNDER everything, and it goes under it measured — the painter
     // memoises on the epoch, so this costs a lookup per moved view, not a DEM sweep per second.
     terrain: { elev, epoch: tileEpoch },

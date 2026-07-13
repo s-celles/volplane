@@ -9,6 +9,7 @@ import type { NavState } from '../core/nav';
 import type { Airspace } from '../core/airspace';
 import type { Traffic } from '../core/flarm';
 import type { ReachRay } from '../core/reach';
+import { shapesIn, peaksIn, type Peak, type Shape } from '../core/landmarks';
 import { shadeGrid, type ShadeGrid, type ShadeView } from '../core/hillshade';
 import type { Alternate } from '../core/landables';
 import type { ElevSampler } from 'soaring-core/ports';
@@ -45,6 +46,15 @@ export interface MapInput {
   terrain?: { elev: ElevSampler; epoch: number } | null;
   /** LND-002/003: the landables, already judged by core. The painter judges nothing. */
   landables?: readonly Alternate[] | null;
+  /** The visual reference from `soaring-data`: coastlines, borders, lakes, named peaks. A frame
+   *  for the eye — where on the planet am I — and NOT a database of places to go. It is the one
+   *  waypoint-shaped layer that may be shipped, because none of it moves. */
+  landmarks?: {
+    coastline: readonly Shape[];
+    borders: readonly Shape[];
+    lakes: readonly Shape[];
+    peaks: readonly Peak[];
+  } | null;
   /** LND-002, and the reason a bare corner of this map is not evidence: the landable layer only
    *  ever shows the fields core was ASKED about — the nearest few, inside a search radius that
    *  is a COST bound. Zoom out to a 200 km frame with a French .cup and the outer half of the
@@ -245,6 +255,65 @@ const LIMIT_COLOR: Record<ReachRay['limit'], string> = {
 };
 
 /** Paint the map, centred on the glider (or the view centre when there is no fix yet). */
+/** The colours of the frame. Deliberately quiet: a coastline is context, and the moment it
+ *  competes with an airspace boundary or a reach edge for the eye, it has stopped helping. */
+const COAST = '#3b4a5c', BORDER = '#4a3f52', LAKE = '#24384d', PEAK = '#6b7686';
+
+/** The world, minimally — under the airspace, over the ground. Only what is in frame is walked:
+ *  the planet's coastlines are cheap to hold and expensive to draw, and a 1 Hz map that traces
+ *  every one of them is a map that stutters. */
+function paintLandmarks(
+  ctx: MapPaint2D, view: View,
+  lm: { coastline: readonly Shape[]; borders: readonly Shape[]; lakes: readonly Shape[]; peaks: readonly Peak[] },
+): void {
+  // The window, in degrees, with a margin so a line that merely CROSSES the frame is not culled
+  // for having no vertex inside it.
+  const halfLon = view.widthM / mPerLng(view.centre.lat) / 2;
+  const halfLat = view.widthM * (view.hPx / view.wPx) / M_PER_LAT / 2;
+  const b = {
+    west: view.centre.lon - halfLon * 1.5, east: view.centre.lon + halfLon * 1.5,
+    south: view.centre.lat - halfLat * 1.5, north: view.centre.lat + halfLat * 1.5,
+  };
+
+  const stroke = (shapes: readonly Shape[], colour: string, width: number, alpha: number): void => {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = width;
+    ctx.globalAlpha = alpha;
+    for (const s of shapesIn(shapes, b)) {
+      for (const ring of s.rings) {
+        ctx.beginPath();
+        ring.forEach(([lon, lat], i) => {
+          const [x, y] = project(view, lon, lat);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      }
+    }
+  };
+
+  stroke(lm.lakes, LAKE, 1, 0.9);
+  stroke(lm.coastline, COAST, 1.5, 0.9);
+  stroke(lm.borders, BORDER, 1, 0.7);
+
+  // The peaks: a small caret and, where there is room, the name and the height. The height is
+  // printed only when the source gave one — a summit labelled '0 m' would be a summit at sea
+  // level, which is exactly the fake zero this project refuses everywhere else.
+  ctx.font = '10px system-ui, sans-serif';
+  for (const p of peaksIn(lm.peaks, b)) {
+    const [x, y] = project(view, p.lon, p.lat);
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = PEAK;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x - 5, y + 4);
+    ctx.lineTo(x, y - 4);
+    ctx.lineTo(x + 5, y + 4);
+    ctx.stroke();
+    ctx.fillStyle = PEAK;
+    ctx.fillText(p.elevM == null ? p.name : `${p.name} ${p.elevM} m`, x + 8, y + 4);
+  }
+}
+
 export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
   const {
     state: s, trail, spaces, traffic, goal, rangeM, reach, terrain, landables,
@@ -258,6 +327,7 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
   // the wall the reach march found, the field the glide can still have — is a claim ABOUT this
   // terrain, and a claim drawn under its own subject reads as a claim about something else.
   if (terrain) paintTerrain(ctx, view, terrain);
+  if (input.landmarks) paintLandmarks(ctx, view, input.landmarks);
 
   // Airspace next (ESP-001's display).
   for (const a of spaces) {
