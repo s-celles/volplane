@@ -56,8 +56,8 @@ test('bytes that are not JSON at the shelf key still load as an empty shelf', as
 
 test('settings round-trip: what was saved comes back', async () => {
   const kv = memKV();
-  await saveSettings(kv, { cacheBudgetMB: 350 });
-  expect(await loadSettings(kv)).toEqual({ cacheBudgetMB: 350 });
+  await saveSettings(kv, { cacheBudgetMB: 350, polar: null, monitoredClasses: ['C', 'D'] });
+  expect(await loadSettings(kv)).toEqual({ cacheBudgetMB: 350, polar: null, monitoredClasses: ['C', 'D'] });
 });
 
 test('garbage settings answer with the factory defaults, never a throw', async () => {

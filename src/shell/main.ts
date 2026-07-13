@@ -21,12 +21,19 @@ import { speedToFly, arrival, glideRatio } from '../core/glide';
 import { windEstimator } from '../core/wind';
 import { parsePflau, parsePflaa, trafficStore, SEE_AND_AVOID, type FlarmStatus } from '../core/flarm';
 import { igcLogger, type IgcLogger } from '../core/igclog';
-import { parseOpenAir, incursions, type Airspace } from '../core/airspace';
-import { simpleTask, freshProgress, advance, type Task, type TaskProgress, type Waypoint } from '../core/task';
+import { openJournal, recoverOrphan, clearJournal, type Journal } from './igcjournal';
+import {
+  parseOpenAir, incursions, activeIncursions, acknowledge, ackKey,
+  type Airspace, type Ack,
+} from '../core/airspace';
+import {
+  RULES, simpleTask, freshProgress, advance, freshAat, advanceAat, scoredDistanceM,
+  type Task, type TaskProgress, type Waypoint, type AatProgress,
+} from '../core/task';
 import { paintMap as paintMovingMap, type MapPaint2D } from './map-ui';
 import type { View as MapView } from './liftmap-ui';
 import { completeness, specFor, type Completeness, type PackSpec, type Held } from '../core/pack';
-import { normalizeSettings, type Settings } from '../core/config';
+import { normalizeSettings, activePolar, type Settings } from '../core/config';
 import { upsertPack, touchPack, setPinned, removePack, sortedShelf, updateOffers, type Shelf } from '../core/shelf';
 import type { EvictionPlan } from '../core/cachebudget';
 import { briefingAt, sandboxWx, type Provenance } from '../core/briefing';
@@ -45,7 +52,7 @@ import { shelfHtml, cacheHtml, BYTES_PER_MB } from './shelf-ui';
 import { completenessHtml, offlineBadgeHtml, briefingHtml, emagramSvg } from './briefing-ui';
 import { paintLiftMap, mixerSvg, mixerHit, legendHtml, type Paint2D, type View } from './liftmap-ui';
 import { elevAtFromTiles, mPerLng, M_PER_LAT, distM, bearingDeg } from 'soaring-core/geo';
-import { DEFAULT_POLAR } from 'soaring-core/polar';
+import { DEFAULT_POLAR, type Polar } from 'soaring-core/polar';
 import { parseIGC } from 'soaring-core/igc';
 import { MIN_RATIOS } from 'soaring-core/lift/calib';
 import { LIFT_COMPS } from 'soaring-core/lift/mix';
@@ -57,11 +64,13 @@ import type { Wx, WxKnobs } from 'soaring-core/weather';
 const kv = await openStore('volplane');
 
 // The shelf as the last session left it (OFF-002): the packs the pilot promised himself,
-// read back before any screen renders. Settings do NOT come back yet — the core config
-// module (Settings/normalizeSettings) has not landed, and prefilling the forms from a shape
-// this file invented would be a fake fill; packstore.ts carries the same gap, marked out
-// loud. Until it lands, every input below simply keeps its built-in default.
+// read back before any screen renders. The settings come back the same way, through core's
+// own normalizer (garbage bytes are the factory defaults, never a throw), and everything
+// below READS this one value: the cache ceiling, the polar that flies, the airspace classes
+// that alert. Every write goes back through normalizeSettings first — the disk only ever
+// holds a shape the normalizer already blessed.
 let shelf: Shelf = await loadShelf(kv);
+let settings: Settings = await loadSettings(kv);
 
 // The DEM, read disk-first and network-second (OFF-004): over ground this machine has visited
 // — or been provisioned for — the radio is never consulted, so the Fly screen survives a
@@ -122,9 +131,15 @@ app.innerHTML = `
     <button id="rec" type="button" title="record the flight as an IGC file (LOG)">● record</button>
     <label class="replay">airspace (OpenAir) <input id="oa" type="file" accept=".txt,.openair" /></label>
     <span id="oa-label" class="goal-label"></span>
-    <label class="replay" title="TSK: waypoints as 'name,lon,lat' lines — start first, finish last, fai-2024 sectors">task (CSV)
+    <label class="replay" title="TSK: waypoints as 'name,lon,lat[,aat]' lines — start first, finish last, fai-2024 sectors; 'aat' marks an assigned area">task (CSV)
       <input id="tsk" type="file" accept=".csv,.txt" /></label>
     <span id="tsk-label" class="goal-label"></span>
+    <label class="replay" title="PLA-010: your glider's polar, as a WinPilot .plr file">polar (.plr)
+      <input id="plr" type="file" accept=".plr,.txt" /></label>
+    <span id="plr-label" class="polar-label"></span>
+    <button id="plr-default" type="button" title="forget the imported polar and fly the built-in default">default</button>
+    <label class="replay" title="ESP-004: airspace classes that ALERT, comma-separated — empty means all; the map always draws everything">alert classes
+      <input id="set-classes" size="10" placeholder="all" /></label>
   </form>
   <div class="canvas-frame map-frame">
     <canvas id="map" width="480" height="480"></canvas>
@@ -166,7 +181,10 @@ function box(k: string, v: string | null, u = '', badge = ''): string {
 
 // ---- the flight computer's own state (Phase 2) ----
 
-const polar = DEFAULT_POLAR;                       // PLA-010: .plr import arrives with settings UI
+// PLA-010: the polar that flies is a SETTING, and activePolar is the one spelling of which
+// one that is — every glide call below reads this binding, so importing a .plr swaps the
+// whole computer's polar in one assignment.
+let polar: Polar = activePolar(settings);
 const estimator = windEstimator();                 // VEN-001: OUR wind, never merged with theirs
 const avgVario = rollingVario(30);                 // POS-006
 let goal: { lon: number; lat: number; elev: number } | null = null;
@@ -175,9 +193,29 @@ let goal: { lon: number; lat: number; elev: number } | null = null;
 const traffic = trafficStore();                    // FLM: the picture, aged on read
 let flarm: FlarmStatus | null = null;              // FLM: the instrument's own judgement
 let logger: IgcLogger | null = null;               // LOG: recording when non-null
+let journal: Journal | null = null;                // SYS-001: the on-disk copy of the recording
+let orphanBanner: HTMLElement | null = null;       // SYS-001: the recovered-flight offer, if up
+let orphanFixes = 0;                               // what letting it go would cost, in fixes
+
+/** Every path that destroys a recovered flight asks first — INCLUDING the accidental one.
+ *  The journal the banner offers from is that flight's only copy, and starting a recording
+ *  wipes the whole 'journal/' prefix: so tapping "record" with an offer still up is a
+ *  destructive act wearing an innocent label, and it gets exactly the confirm the deliberate
+ *  "dismiss" gets. Guarding the deliberate path and leaving the accidental one silent is the
+ *  wrong way round. Answers true when there is nothing left to lose. */
+async function releaseOrphan(): Promise<boolean> {
+  if (!orphanBanner) return true;
+  if (!confirm(`Discard the recovered flight (${orphanFixes} fixes)? It exists nowhere else.`)) return false;
+  await clearJournal(kv);
+  orphanBanner.remove();
+  orphanBanner = null;
+  return true;
+}
 let spaces: Airspace[] = [];                       // ESP: what the loaded file holds
+let acks: Ack[] = [];                              // ESP-004: what the pilot silenced, and until when
 let task: Task | null = null;                      // TSK: the declared task, if any
 let taskProgress: TaskProgress | null = null;
+let aat: AatProgress | null = null;                // TSK: best scoring fixes per assigned area
 const trail: [number, number][] = [];              // CAR: the recent track
 let mapWidthM = 20_000;                            // CAR: zoom, metres across the canvas
 
@@ -212,18 +250,29 @@ function flarmHtml(s: NavState): string {
 }
 
 /** ESP: the verdicts for now. 'inside' and 'predicted' never share a colour (ESP-003), and a
- *  worst-cased vertical says so in words (ESP-005). */
+ *  worst-cased vertical says so in words (ESP-005). The verdicts are computed over ALL
+ *  spaces, always — the class filter and the pilot's acknowledgements (ESP-004) mute the
+ *  ALERTS, through activeIncursions, and never the judging or the map's picture. The ack
+ *  button carries its volume's key; the delegated listener on #fly-view catches it, because
+ *  these rows repaint at 1 Hz and a handler on the row would die with the first repaint. */
 function airspaceHtml(s: NavState): string {
   if (!spaces.length || !s.fix) return '';
   const inc = incursions(spaces, s.fix.lon, s.fix.lat, s.fix.alt ?? null, s.track, s.groundSpeed);
-  if (!inc.length) return '';
-  return `<div class="airspace">${inc.map(i =>
+  const act = activeIncursions(inc, settings.monitoredClasses, acks, s.fix.sod);
+  if (!act.length) return '';
+  const attr = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return `<div class="airspace">${act.map(i =>
     `<div class="asp-row ${i.kind}">${i.kind === 'inside' ? 'INSIDE' : 'AHEAD 60 s'} — ${
-      i.space.class} ${i.space.name}${i.worstCase ? ' (altitude unknown: worst case assumed)' : ''}</div>`,
+      i.space.class} ${i.space.name}${i.worstCase ? ' (altitude unknown: worst case assumed)' : ''
+    }<button class="ack-btn" type="button" data-ack="${attr(ackKey(i.space))
+    }" title="silence this volume for five minutes — it alerts again after">ack 5 min</button></div>`,
   ).join('')}</div>`;
 }
 
-/** TSK: the declared task's live state — which point is next, which are turned. */
+/** TSK: the declared task's live state — which point is next, which are turned, and what
+ *  the flight has SCORED so far (TSK-003). The scored distance is null before the start
+ *  validates, and null renders as the dash: an unstarted task has no scored distance, and
+ *  showing 0.0 km would be a fake zero (POT-007). */
 function taskHtml(): string {
   if (!task || !taskProgress) return '';
   const rows = task.points.map((p, i) => {
@@ -231,7 +280,9 @@ function taskHtml(): string {
     const current = i === taskProgress!.next;
     return `<span class="tsk-pt${done ? ' done' : ''}${current ? ' current' : ''}">${p.wp.name}</span>`;
   }).join(' → ');
-  return `<div class="tsk">Task (${task.rules}): ${rows}${
+  const scored = aat ? scoredDistanceM(task, taskProgress, aat) : null;
+  return `<div class="tsk">Task (${task.rules}): ${rows} — scored ${
+    scored == null ? '—' : `${(scored / 1000).toFixed(1)} km`}${
     taskProgress.next >= task.points.length ? ' — COMPLETE' : ''}</div>`;
 }
 
@@ -304,7 +355,8 @@ function render(s: NavState, link: LinkState): void {
     ${taskHtml()}
     <div class="link ${link.state}">Link: ${link.state}${
       link.state === 'closed' && link.error ? ` — ${link.error}` : ''
-    }${stale ? ' — values are the LAST RECEIVED, not current' : ''}</div>
+    }${stale ? ' — values are the LAST RECEIVED, not current' : ''}${
+      journal?.lastError ? ` — journal writes failing (${journal.lastError}): a crash now loses the whole flight` : ''}</div>
   `;
   repaintMap(s);
 }
@@ -338,46 +390,98 @@ function render(s: NavState, link: LinkState): void {
   render(state, link);
 };
 app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => render(state, link);
-(app.querySelector('#rec') as HTMLButtonElement).onclick = e => {
+// ESP-004: the ack rides the shelfEl pattern — ONE delegated listener on the container that
+// is built once, because the alert rows under it repaint every second. The ack is keyed, not
+// indexed: between the paint and the tap the row order may have changed, but the key still
+// names the volume the pilot read.
+flyView.onclick = e => {
+  const btn = (e.target as HTMLElement).closest('button[data-ack]') as HTMLButtonElement | null;
+  if (!btn || !state.fix) return;
+  const space = spaces.find(sp => ackKey(sp) === btn.dataset.ack);
+  if (!space) return;                     // a click racing a file reload: nothing left to ack
+  acks = acknowledge(acks, space, state.fix.sod);
+  render(state, link);
+};
+(app.querySelector('#rec') as HTMLButtonElement).onclick = async e => {
   const btn = e.target as HTMLButtonElement;
   if (!logger) {
-    logger = igcLogger({ day: new Date().toISOString().slice(0, 10) });
+    // openJournal below claims the 'journal/' prefix WHOLE — including the fixes a
+    // recovered-flight banner is still offering. Ask before that becomes true; a pilot who
+    // says no wanted to download the crashed flight first, and taking off with the recorder
+    // running is not worth silently shredding it.
+    if (!await releaseOrphan()) return;
+    const day = new Date().toISOString().slice(0, 10);
+    // The logger records; the journal insures it (SYS-001): every few seconds the drained
+    // records land in the KV, so a crash costs at most one buffer, not the flight.
+    logger = igcLogger({ day });
     btn.textContent = '■ stop & save';
+    journal = await openJournal(kv, { day });
     return;
   }
-  // Stop and hand the file over — a Blob download works in every webview the shell targets,
-  // and the log survives even if the app dies a second later (SYS-001's spirit for Phase 4;
-  // continuous on-disk journaling is the recovery story's own work).
-  const igc = logger.file();
-  const n = logger.count();
+  // Stop and hand the file over — a Blob download works in every webview the shell targets.
+  // The journal is flushed BEFORE the file is assembled (belt and braces: even a death
+  // between here and the download loses nothing) and discarded only AFTER the download was
+  // offered — a journal found at the next startup then always means a crash.
+  const lg = logger, j = journal;
   logger = null;
+  journal = null;
   btn.textContent = '● record';
+  if (j) await j.flush();
+  const igc = lg.file();
+  const n = lg.count();
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([igc], { type: 'application/octet-stream' }));
   a.download = `volplane-${new Date().toISOString().slice(0, 10)}.igc`;
   a.click();
   URL.revokeObjectURL(a.href);
+  if (j) await j.discard();
   (app.querySelector('#oa-label') as HTMLElement).textContent = `saved ${n} fixes`;
 };
-/** TSK: adopt a task from CSV text — one waypoint per line, "name,lon,lat". Lines that fail
- *  to parse are counted, not guessed at — same refusal discipline as OpenAir. Returns the
- *  label to show, or null when the text does not amount to a task. This is the ONE parse
- *  path: the file input and the restart restore (OFF-002) both come through here, so a
- *  restored task cannot behave differently from one just chosen. */
+/** TSK: adopt a task from CSV text — one waypoint per line, "name,lon,lat" with an optional
+ *  fourth field "aat" marking that point an assigned area (TSK-003). Lines that fail to
+ *  parse are counted, not guessed at — same refusal discipline as OpenAir, and it covers the
+ *  fourth field too: an unrecognised token there is refused, never silently read as a
+ *  cylinder the pilot meant to be an area. Returns the label to show, or null when the text
+ *  does not amount to a task. This is the ONE parse path: the file input and the restart
+ *  restore (OFF-002) both come through here, so a restored task cannot behave differently
+ *  from one just chosen. */
 function adoptTask(text: string): string | null {
-  const wps: Waypoint[] = [];
+  const wps: { wp: Waypoint; aat: boolean }[] = [];
   let refused = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
-    const [name, lonS, latS] = line.split(',').map(x => x.trim());
+    const [name, lonS, latS, flag] = line.split(',').map(x => x.trim());
     const lon = Number(lonS), lat = Number(latS);
-    if (name && Number.isFinite(lon) && Number.isFinite(lat)) wps.push({ name, lon, lat });
+    const mark = (flag ?? '').toLowerCase();
+    if (name && Number.isFinite(lon) && Number.isFinite(lat) && (mark === '' || mark === 'aat'))
+      wps.push({ wp: { name, lon, lat }, aat: mark === 'aat' });
     else refused++;
   }
   if (wps.length < 2) return null;
-  task = simpleTask(wps, 'fai-2024');
+  // No area marked: the club default, exactly as before. Any area marked: the same shape —
+  // line start, line finish — with each marked point an aatArea at the rules' own radius.
+  // First and last are gates regardless of a mark: a task cannot start or finish in an
+  // assigned area under these rules, and advanceAat would refuse to score one anyway.
+  if (wps.some(w => w.aat)) {
+    const r = RULES['fai-2024'];
+    task = {
+      rules: 'fai-2024',
+      points: wps.map((w, i) => ({
+        wp: w.wp,
+        sector: i === 0 ? { kind: 'line', lengthM: r.startLineM }
+          : i === wps.length - 1 ? { kind: 'line', lengthM: r.finishLineM }
+          : w.aat ? { kind: 'aatArea', radiusM: r.aatAreaM }
+          : { kind: 'cylinder', radiusM: r.tpCylinderM },
+      })),
+    };
+  } else {
+    task = simpleTask(wps.map(w => w.wp), 'fai-2024');
+  }
   taskProgress = freshProgress(task);
-  return `${wps.length} points, ${task.rules}${refused ? `, ${refused} lines refused` : ''}`;
+  aat = freshAat(task);
+  const areas = task.points.filter(p => p.sector.kind === 'aatArea').length;
+  return `${wps.length} points, ${task.rules}${areas ? `, ${areas} assigned area${areas > 1 ? 's' : ''}` : ''}${
+    refused ? `, ${refused} lines refused` : ''}`;
 }
 (app.querySelector('#tsk') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
@@ -389,6 +493,49 @@ function adoptTask(text: string): string | null {
   // OFF-002: the task survives the restart — saved as the RAW text, and only once adopted:
   // a file refused above is not a task, and must not come back next launch as one.
   if (label) void saveFlightFile(kv, 'task', { name: f.name, text });
+  render(state, link);
+};
+// PLA-010: the name of the polar that FLIES, as words the pilot can check against his
+// glider. The default is named as the default — an imported polar and the built-in one must
+// never be mistaken for each other.
+const polarName = (): string =>
+  settings.polar ? settings.polar.name : `${DEFAULT_POLAR.name} (default)`;
+const plrLabel = app.querySelector('#plr-label') as HTMLElement;
+(app.querySelector('#plr') as HTMLInputElement).onchange = async e => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  // The normalizer IS the gatekeeper: repairPolar runs the file through parsePlr and nulls
+  // what the parser refuses — a second parse opinion here could only ever disagree with it.
+  const next = normalizeSettings({ ...settings, polar: { name: f.name, plr: await f.text() } });
+  if (next.polar === null) {
+    plrLabel.textContent = `not a .plr the parser accepts — keeping ${polarName()}`;
+    return;
+  }
+  settings = next;
+  polar = activePolar(settings);
+  void saveSettings(kv, settings);
+  plrLabel.textContent = polarName();
+  render(state, link);
+};
+(app.querySelector('#plr-default') as HTMLButtonElement).onclick = () => {
+  settings = normalizeSettings({ ...settings, polar: null });
+  polar = activePolar(settings);
+  void saveSettings(kv, settings);
+  plrLabel.textContent = polarName();
+  render(state, link);
+};
+// ESP-004: which classes ALERT. Committed onchange, not per keystroke — a half-typed list
+// must not mute anything — and echoed back normalized (trimmed, uppercase, deduped), so the
+// input always shows exactly the filter that rules. Empty means all: silence is chosen per
+// class, never defaulted into.
+(app.querySelector('#set-classes') as HTMLInputElement).onchange = e => {
+  const el = e.target as HTMLInputElement;
+  const raw = el.value.trim();
+  settings = normalizeSettings({
+    ...settings, monitoredClasses: raw === '' ? null : raw.split(','),
+  });
+  void saveSettings(kv, settings);
+  el.value = settings.monitoredClasses?.join(', ') ?? '';
   render(state, link);
 };
 (app.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => { mapWidthM = Math.max(2000, mapWidthM / 1.5); render(state, link); };
@@ -476,10 +623,18 @@ async function run(dev: Device): Promise<void> {
       if (state.fix.alt != null) estimator.add(state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod);
       if (state.vario != null) avgVario.add(state.fix.sod, state.vario);
       logger?.add(state);                          // LOG: every fix, once per second
+      // SYS-001: the journal drinks from the logger's cursor — the logger stays the ONE
+      // encoder, the journal merely a second sink for the same records. add never throws
+      // and never blocks; a failing KV degrades the insurance, not this loop.
+      if (logger && journal) journal.add(logger.drain());
       trail.push([state.fix.lon, state.fix.lat]);  // CAR: the tail the map draws
       if (trail.length > 600) trail.shift();       // ~10 min at 1 Hz
-      if (task && taskProgress)                    // TSK: the fold, fix by fix
+      if (task && taskProgress) {                  // TSK: the folds, fix by fix
         taskProgress = advance(task, taskProgress, state.fix.lon, state.fix.lat, state.fix.sod);
+        // AAT scoring runs AFTER advance on the same fix, by advanceAat's own contract:
+        // entry into an area both validates it and plants its first scoring candidate.
+        if (aat) aat = advanceAat(task, taskProgress, aat, state.fix.lon, state.fix.lat);
+      }
     }
     render(state, link);
   }
@@ -682,7 +837,6 @@ function renderNet(): void {
  *  or non-positive value falls back to the default rather than to zero — a 0 MB ceiling read
  *  off a typo would evict everything the pilot provisioned. */
 const budgetMB = (): number => normalizeSettings({ cacheBudgetMB: Number(budgetIn.value) }).cacheBudgetMB;
-const settingsOf = (): Settings => ({ cacheBudgetMB: budgetMB() });
 
 /** Persist the shelf and repaint — WITH a catch (a confirmed finding): a pin that fails to
  *  write exists only in memory and silently dies at the very restart it exists for. The
@@ -894,10 +1048,13 @@ shelfEl.onclick = e => {
 // (blur/enter), never per keystroke, so a half-typed number cannot start an eviction; the
 // committed value is persisted (OFF-002) and enforced in the same breath.
 budgetIn.onchange = () => void (async () => {
-  budgetIn.value = String(budgetMB());               // show the value that will actually rule
+  // The committed value joins the ONE settings record — through the normalizer, like every
+  // other write — so saving the ceiling can never drop the polar or the classes beside it.
+  settings = normalizeSettings({ ...settings, cacheBudgetMB: Number(budgetIn.value) });
+  budgetIn.value = String(settings.cacheBudgetMB);   // show the value that will actually rule
   try {
-    await saveSettings(kv, settingsOf());
-    lastPlan = await enforceBudget(kv, shelf, budgetMB() * BYTES_PER_MB);
+    await saveSettings(kv, settings);
+    lastPlan = await enforceBudget(kv, shelf, settings.cacheBudgetMB * BYTES_PER_MB);
   } catch { /* the cache line repaints from what really happened either way */ }
   await refreshShelf();
 })();
@@ -1055,12 +1212,51 @@ async function restoreFlightFiles(): Promise<void> {
   if (oa || tk) render(state, link);
 }
 
-// The settings, back into the form they rule from (OFF-002: configuration persists). The
-// input's built-in value is only the default of a first launch.
-async function restoreSettings(): Promise<void> {
-  budgetIn.value = String((await loadSettings(kv)).cacheBudgetMB);
+// The settings, back into the forms they rule from (OFF-002: configuration persists). The
+// inputs' built-in values are only the defaults of a first launch; `settings` itself came
+// back with the shelf, before any screen rendered.
+function restoreSettings(): void {
+  budgetIn.value = String(settings.cacheBudgetMB);
+  (app.querySelector('#set-classes') as HTMLInputElement).value =
+    settings.monitoredClasses?.join(', ') ?? '';
+  plrLabel.textContent = polarName();
+}
+
+// SYS-001's other half: a journal still on disk at startup IS a crash — the clean stop path
+// discards it — and what it holds is the only copy of that flight. The banner offers the
+// rebuilt file and clears the journal only once the pilot has downloaded it or knowingly let
+// it go; recoverOrphan itself deletes nothing.
+async function restoreOrphan(): Promise<void> {
+  const orphan = await recoverOrphan(kv);
+  if (!orphan) return;
+  const banner = document.createElement('div');
+  banner.className = 'recovered-banner';
+  banner.innerHTML = `recovered flight from a crash — ${orphan.fixes} fixes —
+    <button id="orphan-dl" type="button">download</button>
+    <button id="orphan-x" type="button">dismiss</button>`;
+  flyView.before(banner);
+  orphanBanner = banner;
+  orphanFixes = orphan.fixes;
+  (banner.querySelector('#orphan-dl') as HTMLButtonElement).onclick = async () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([orphan.igc], { type: 'application/octet-stream' }));
+    // The recovered day, not today: the crash may be days old, and a recovered flight
+    // stamped with the download date would be an invented fact (POT-007).
+    a.download = `volplane-${orphan.meta.day}-recovered.igc`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    await clearJournal(kv);
+    banner.remove();
+    orphanBanner = null;
+  };
+  // The deliberate discard and the accidental one (starting a recording) now go through the
+  // SAME guard — one confirm, one clearJournal, no path that quietly wins.
+  (banner.querySelector('#orphan-x') as HTMLButtonElement).onclick = () => void releaseOrphan();
 }
 
 render(state, link);
+// The orphan check runs before anything else can touch the 'journal/' prefix — a recording
+// started first would wipe exactly the fixes the banner is about to offer.
+await restoreOrphan();
 void restoreFlightFiles();
-void restoreSettings();
+restoreSettings();

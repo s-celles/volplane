@@ -53,6 +53,15 @@ export function igcHeader(meta: LogMeta): string {
   ].join('\r\n') + '\r\n';
 }
 
+/** Header plus records, CRLF-joined, trailing CRLF when there is anything to trail. This is
+ *  THE assembly — the live logger's file() and the crash journal's recovery both call it, so
+ *  a file rebuilt from journaled chunks after a crash is byte-identical to the file the
+ *  logger would have handed over on a clean stop. Recovery cannot drift from recording
+ *  because there is only one place that knows how records become a file. */
+export function assembleIgc(meta: LogMeta, records: readonly string[]): string {
+  return igcHeader(meta) + records.join('\r\n') + (records.length ? '\r\n' : '');
+}
+
 export interface IgcLogger {
   /** Feed every navigation state; only fixes become records, at most one per second — the
    *  IGC second is the format's own resolution, and Condor's 1 Hz maps one-to-one. */
@@ -60,11 +69,20 @@ export interface IgcLogger {
   /** The complete file so far. Cheap to call: the records accumulate as strings. */
   file(): string;
   count(): number;
+  /** The B records appended since the last drain. This is how the crash journal reads the
+   *  flight: the logger stays the ONE writer of the one record sequence, and the journal is
+   *  merely a second sink for the same records — never a second encoder that could disagree
+   *  with the first. Draining moves a cursor; it does not touch the records, so file() and
+   *  count() answer exactly as before. */
+  drain(): string[];
 }
 
 export function igcLogger(meta: LogMeta): IgcLogger {
   const records: string[] = [];
   let lastSod = -1;
+  // How far drain() has read into `records`. A cursor rather than a second array: the records
+  // exist once, and the two sinks (file, journal) are two views of the same sequence.
+  let drained = 0;
   return {
     add(s: NavState): void {
       if (!s.fix || Math.floor(s.fix.sod) === lastSod) return;
@@ -73,7 +91,12 @@ export function igcLogger(meta: LogMeta): IgcLogger {
       lastSod = Math.floor(s.fix.sod);
       records.push(rec);
     },
-    file: () => igcHeader(meta) + records.join('\r\n') + (records.length ? '\r\n' : ''),
+    file: () => assembleIgc(meta, records),
     count: () => records.length,
+    drain(): string[] {
+      const out = records.slice(drained);
+      drained = records.length;
+      return out;
+    },
   };
 }

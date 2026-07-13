@@ -1,7 +1,11 @@
 // The task validator, pinned where regulation bites: sectors are versioned VALUES, order is
 // law, and a validated turnpoint never un-validates.
 import { test, expect } from 'bun:test';
-import { simpleTask, freshProgress, advance, inSector, RULES, type Waypoint } from './task';
+import {
+  simpleTask, aatTask, freshProgress, advance, freshAat, advanceAat, scoredDistanceM,
+  inSector, RULES, type Waypoint,
+} from './task';
+import { distM } from 'soaring-core/geo';
 
 const A: Waypoint = { name: 'A', lon: 6.0, lat: 46.0 };
 const B: Waypoint = { name: 'B', lon: 6.2, lat: 46.0 };   // ~15 km east of A
@@ -60,4 +64,95 @@ test('a start line stands across the first leg, not around the point', () => {
   expect(inSector(start, A.lon, A.lat + 400 / 111320, null, B)).toBe(true);
   // 900 m EAST of A (along the leg): past the gate, not on it.
   expect(inSector(start, A.lon + 900 / 76800, A.lat, null, B)).toBe(false);
+});
+
+// ---- AAT scoring: the distance achieved through assigned areas ----
+
+// A straight west–east AAT at lat 46: start, one 20 km area, finish, half a degree apart
+// (~38.7 km per leg). Depth into the area is due-east distance along the course.
+const S: Waypoint = { name: 'S', lon: 6.0, lat: 46.0 };
+const M: Waypoint = { name: 'M', lon: 6.5, lat: 46.0 };
+const F: Waypoint = { name: 'F', lon: 7.0, lat: 46.0 };
+
+test("the 'fai-2024' entry carries the 20 km AAT area default, frozen", () => {
+  expect(RULES['fai-2024'].aatAreaM).toBe(20000);
+  const t = aatTask([S, M, F]);
+  expect(t.rules).toBe('fai-2024');
+  expect(t.points[0].sector).toEqual({ kind: 'line', lengthM: 1000 });
+  expect(t.points[1].sector).toEqual({ kind: 'aatArea', radiusM: 20000 });
+  expect(t.points[2].sector).toEqual({ kind: 'line', lengthM: 1000 });
+});
+
+test('scored distance is null before the start, a real zero just after it', () => {
+  const t = aatTask([S, M, F]);
+  let p = freshProgress(t);
+  const a = freshAat(t);
+  // Unstarted: NO scored distance — a dash, never a fake zero.
+  expect(scoredDistanceM(t, p, a)).toBeNull();
+  p = advance(t, p, S.lon, S.lat, 1000);
+  expect(p.next).toBe(1);
+  // Started and nothing else: a real number, and that number is 0.
+  expect(scoredDistanceM(t, p, a)).toBe(0);
+});
+
+test('deeper into the area raises the score; a shallower later fix never lowers it', () => {
+  const t = aatTask([S, M, F]);
+  let p = freshProgress(t);
+  let a = freshAat(t);
+  p = advance(t, p, S.lon, S.lat, 1000);
+
+  // Enter the area ~11.6 km short of its centre: entry validates the point AND plants the
+  // first scoring fix — the pilot's real position, never the invented centre.
+  const entry = { lon: 6.35, lat: 46.0 };
+  p = advance(t, p, entry.lon, entry.lat, 2000);
+  expect(p.next).toBe(2);
+  a = advanceAat(t, p, a, entry.lon, entry.lat);
+  const atEntry = scoredDistanceM(t, p, a);
+  expect(atEntry).toBeCloseTo(distM(S.lon, S.lat, entry.lon, entry.lat), 6);
+
+  // Push ~19 km deeper along the course: the score follows the pilot east.
+  const deep = { lon: 6.6, lat: 46.0 };
+  a = advanceAat(t, p, a, deep.lon, deep.lat);
+  const atDeep = scoredDistanceM(t, p, a);
+  expect(atDeep).toBeCloseTo(distM(S.lon, S.lat, deep.lon, deep.lat), 6);
+  expect(atDeep!).toBeGreaterThan(atEntry!);
+
+  // Turn back: a shallower fix inside the same area changes NOTHING — identity, the very
+  // same array, so there is nothing to repaint. What happened, happened.
+  const shallow = advanceAat(t, p, a, 6.45, 46.0);
+  expect(shallow).toBe(a);
+  expect(scoredDistanceM(t, p, shallow)).toBe(atDeep!);
+
+  // Finish: the score is start → best fix → finish, through the point actually reached.
+  p = advance(t, p, F.lon, F.lat, 3000);
+  expect(p.next).toBe(3);
+  const done = scoredDistanceM(t, p, a);
+  expect(done).toBeCloseTo(
+    distM(S.lon, S.lat, deep.lon, deep.lat) + distM(deep.lon, deep.lat, F.lon, F.lat), 6);
+});
+
+test('a fix outside the area, or before the area validates, scores nothing', () => {
+  const t = aatTask([S, M, F]);
+  let p = freshProgress(t);
+  const a = freshAat(t);
+  // Inside the area geometrically, but the start has not been crossed: task order is law
+  // for scoring exactly as it is for validation.
+  expect(advanceAat(t, p, a, M.lon, M.lat)).toBe(a);
+  p = advance(t, p, S.lon, S.lat, 1000);
+  p = advance(t, p, M.lon, M.lat, 2000);
+  // 25 km east of the centre: outside a 20 km area — identity again.
+  expect(advanceAat(t, p, a, M.lon + 25000 / 76800, M.lat)).toBe(a);
+});
+
+test('a task with no areas scores exactly its validated wp-to-wp legs', () => {
+  const t = simpleTask([A, B, C]);
+  let p = freshProgress(t);
+  let a = freshAat(t);
+  p = advance(t, p, A.lon, A.lat, 1000);
+  p = advance(t, p, B.lon, B.lat, 2000);
+  a = advanceAat(t, p, a, B.lon, B.lat);              // harmless on a cylinder task
+  expect(scoredDistanceM(t, p, a)).toBeCloseTo(distM(A.lon, A.lat, B.lon, B.lat), 6);
+  p = advance(t, p, C.lon, C.lat, 3000);
+  expect(scoredDistanceM(t, p, a)).toBeCloseTo(
+    distM(A.lon, A.lat, B.lon, B.lat) + distM(B.lon, B.lat, C.lon, C.lat), 6);
 });

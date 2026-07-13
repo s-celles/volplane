@@ -10,7 +10,7 @@
 // exactly when it was needed. (This is an alert built on measured position and a MISSING
 // measurement — C3 forbids alerts on modelled fields, not on honest worst-casing.)
 
-import { mPerLng, M_PER_LAT } from 'soaring-core/geo';
+import { mPerLng, M_PER_LAT, bearingDeg, distM } from 'soaring-core/geo';
 
 export interface Airspace {
   name: string;
@@ -51,6 +51,31 @@ function coordOf(s: string): number | undefined {
 
 const NM = 1852;
 
+/** Tessellate an arc about a centre into polygon vertices, both endpoints included, on the
+ *  same local flat earth `insideHorizontal` walks — so the ray casting and the arc agree on
+ *  where the boundary is. OpenAir angles are degrees true FROM the centre; the sweep is
+ *  normalised so a clockwise arc always advances and a counter-clockwise one always
+ *  retreats (an end "behind" the start means the arc wraps through north). 5° steps keep
+ *  the chord error under ~0.4% of the radius — invisible at CTR scale, cheap to test. */
+function arcPoints(
+  c: { lon: number; lat: number }, radiusM: number,
+  startDeg: number, endDeg: number, dir: '+' | '-',
+): [number, number][] {
+  let end = endDeg;
+  if (dir === '+' && end <= startDeg) end += 360;
+  if (dir === '-' && end >= startDeg) end -= 360;
+  const n = Math.max(1, Math.ceil(Math.abs(end - startDeg) / 5));
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= n; i++) {
+    const th = (startDeg + (end - startDeg) * i / n) * Math.PI / 180;
+    pts.push([
+      c.lon + radiusM * Math.sin(th) / mPerLng(c.lat),
+      c.lat + radiusM * Math.cos(th) / M_PER_LAT,
+    ]);
+  }
+  return pts;
+}
+
 /** Parse an OpenAir file. Volumes that fail to parse are DROPPED and counted — the caller
  *  can tell the pilot "212 loaded, 3 refused", which is OFF-010's honesty for airspace. */
 export function parseOpenAir(text: string): { spaces: Airspace[]; refused: number } {
@@ -58,9 +83,13 @@ export function parseOpenAir(text: string): { spaces: Airspace[]; refused: numbe
   let refused = 0;
   let cur: Partial<Airspace> & { points?: [number, number][] } = {};
   let centre: { lon: number; lat: number } | null = null;
+  // Arc direction is per-block state exactly like `centre`: a `V D=-` speaks for the volume
+  // it sits in, never for the next one — a stale direction would silently mirror every arc
+  // that follows, so each AC starts clockwise again (OpenAir's default).
+  let dir: '+' | '-' = '+';
 
   const flush = (): void => {
-    if (!cur.class) { cur = {}; centre = null; return; }
+    if (!cur.class) { cur = {}; centre = null; dir = '+'; return; }
     const ok = (cur.points && cur.points.length >= 3) || cur.circle;
     // floor/ceiling: undefined means an alt line REFUSED to parse; absent lines mean the
     // file simply did not say, which OpenAir reads as surface-to-unlimited.
@@ -72,7 +101,7 @@ export function parseOpenAir(text: string): { spaces: Airspace[]; refused: numbe
         circle: cur.circle,
       });
     } else refused++;
-    cur = {}; centre = null;
+    cur = {}; centre = null; dir = '+';
   };
 
   for (const raw of text.split(/\r?\n/)) {
@@ -93,11 +122,14 @@ export function parseOpenAir(text: string): { spaces: Airspace[]; refused: numbe
         break;
       }
       case 'V': {
-        const m = /^X\s*=\s*(.+?[NS])\s+(.+?[EW])$/.exec(arg);
-        if (m) {
-          const lat = coordOf(m[1]), lon = coordOf(m[2]);
+        // One assignment per V line, and X= / D= may arrive in either order within a block.
+        const x = /^X\s*=\s*(.+?[NS])\s+(.+?[EW])$/.exec(arg);
+        if (x) {
+          const lat = coordOf(x[1]), lon = coordOf(x[2]);
           centre = lat != null && lon != null ? { lon, lat } : null;
         }
+        const d = /^D\s*=\s*([+-])$/.exec(arg);
+        if (d) dir = d[1] as '+' | '-';
         break;
       }
       case 'DC': {
@@ -106,7 +138,36 @@ export function parseOpenAir(text: string): { spaces: Airspace[]; refused: numbe
         else cur.floor = undefined;
         break;
       }
-      default: break;                                   // SP/SB styling, DA arcs: not held yet
+      case 'DA': {
+        const parts = arg.split(',').map((s) => Number(s.trim()));
+        if (centre && parts.length === 3 && parts.every(Number.isFinite)) {
+          const [r, a1, a2] = parts;
+          (cur.points ??= []).push(...arcPoints(centre, r * NM, a1, a2, dir));
+        } else cur.floor = undefined;                   // no centre / bad numbers: refuse whole
+        break;
+      }
+      case 'DB': {
+        const halves = arg.split(',');
+        const ends = halves.map((h) => {
+          const m = /^(.+?[NS])\s+(.+?[EW])$/.exec(h.trim());
+          const lat = m && coordOf(m[1]), lon = m && coordOf(m[2]);
+          return lat != null && lon != null ? { lon, lat } : null;
+        });
+        const [p1, p2] = ends;
+        if (centre && halves.length === 2 && p1 && p2) {
+          const arc = arcPoints(centre,
+            distM(centre.lon, centre.lat, p1.lon, p1.lat),
+            bearingDeg(centre.lon, centre.lat, p1.lon, p1.lat),
+            bearingDeg(centre.lon, centre.lat, p2.lon, p2.lat), dir);
+          // The interior is drawn at the FIRST point's radius, but the arc must END on the
+          // file's own second coordinate — the next DP continues from there, and a
+          // re-projected endpoint would leave a sliver gap in the ring.
+          arc[arc.length - 1] = [p2.lon, p2.lat];
+          (cur.points ??= []).push(...arc);
+        } else cur.floor = undefined;                   // no centre / bad coords: refuse whole
+        break;
+      }
+      default: break;                                   // SP/SB styling: presentation, not shape
     }
   }
   flush();
@@ -174,4 +235,52 @@ export function incursions(
       out.push({ space: a, kind: 'predicted', worstCase });
   }
   return out;
+}
+
+// ---- ESP-004: filter and acknowledge ----
+// `incursions()` above stays pure and total: it judges every loaded volume, always. What
+// the pilot chose not to hear is a VIEW over those verdicts, never a change to them — a
+// filtered-out incursion still exists, it is just not shouted. That separation is what
+// keeps the verdict logic testable and the silencing auditable.
+
+/** A pilot's acknowledgement of one volume, keyed by `ackKey`, expiring at `untilSod`. */
+export interface Ack { key: string; untilSod: number }
+
+/** How long an acknowledgement holds (s). Five minutes: a temporary silence while the
+ *  pilot deals with the airspace deliberately, NOT a permanent mute — the volume alerts
+ *  again when the time is up, because "I know" ages badly in a moving glider. */
+export const ACK_S = 300;
+
+/** One spelling for "this volume": class + name, so an ack survives the same space being
+ *  re-parsed into a fresh object. */
+export const ackKey = (a: Airspace): string =>
+  `${a.class.trim().toUpperCase()}/${a.name.trim().toUpperCase()}`;
+
+/** Acknowledge a volume until `sod + durationS`. Pure: returns a new list, and an existing
+ *  ack for the same key is REPLACED, not stacked — re-acknowledging extends the silence. */
+export function acknowledge(
+  acks: readonly Ack[], space: Airspace, sod: number, durationS = ACK_S,
+): Ack[] {
+  const key = ackKey(space);
+  return [...acks.filter((a) => a.key !== key), { key, untilSod: sod + durationS }];
+}
+
+/** The one gate between `incursions()` and the screen: drop unmonitored classes, drop
+ *  acked volumes still inside their silence. `classes === null` means the filter is
+ *  UNKNOWN, and an unknown filter filters NOTHING — silence must be chosen, never
+ *  defaulted into (the null-is-unknown discipline pointed at safety). An ack silences
+ *  both verdicts alike: a pilot who acknowledged being inside does not want the same
+ *  volume re-announced as predicted a breath later. */
+export function activeIncursions(
+  incs: readonly Incursion[], classes: readonly string[] | null,
+  acks: readonly Ack[], sod: number,
+): Incursion[] {
+  return incs.filter((inc) => {
+    if (classes !== null) {
+      const c = inc.space.class.trim().toUpperCase();
+      if (!classes.some((w) => w.trim().toUpperCase() === c)) return false;
+    }
+    const key = ackKey(inc.space);
+    return !acks.some((a) => a.key === key && sod < a.untilSod);
+  });
 }

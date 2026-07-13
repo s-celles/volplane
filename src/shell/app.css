@@ -72,6 +72,17 @@ button { cursor: pointer; }
 .asp-row { padding: .35rem .6rem; border-radius: .35rem; margin-top: .25rem; font-weight: 600; }
 .asp-row.inside { background: rgba(224, 82, 82, .18); color: var(--bad); }
 .asp-row.predicted { background: rgba(224, 160, 48, .15); color: var(--warn); }
+/* ESP-004: the ack rides its row, quiet next to the alert it silences — for five minutes,
+   which the button says out loud so nobody mistakes it for a mute. */
+.ack-btn { margin-left: .6rem; padding: .1rem .45rem; font-size: .7rem; font-weight: 400; }
+
+/* ---- PLA-010: the name of the polar that flies, beside its picker ---- */
+.polar-label { font-size: .85rem; color: var(--dim); }
+
+/* ---- SYS-001: a flight pulled back from a crash. Warning colours: this is the only copy,
+   and the banner exists to make the pilot decide its fate on purpose. ---- */
+.recovered-banner { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .75rem 0; padding: .5rem .75rem; border-radius: .5rem; background: rgba(224, 160, 48, .15); color: var(--warn); font-size: .9rem; font-weight: 600; }
+.recovered-banner button { padding: .25rem .5rem; font-size: .8rem; font-weight: 400; }
 
 /* ---- WX-005: the sandbox must never pass for a sky. Banner and outline, both from the
    .sandbox class briefingHtml derives from the DATA. ---- */
