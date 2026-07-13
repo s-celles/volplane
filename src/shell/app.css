@@ -186,3 +186,23 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
 .cache .cache-usage.unknown { color: var(--dim); }
 .cache .evicted { color: var(--dim); }
 .cache .over-budget { color: var(--warn); }
+
+/* ---- ANA-002: the cross-section. The ground is solid; a HOLE in it is unloaded terrain,
+   and the warning text above it says so — a smooth valley drawn over unmeasured ground is
+   the plan view's own lie told in the dimension that was meant to fix it. ---- */
+.xsection-frame { margin-top: 1rem; max-width: 30rem; }
+.xsection { width: 100%; background: #10141a; border: 1px solid #2a313c; border-radius: .5rem; }
+.xsection .ground { fill: #2a3340; stroke: #4a5568; stroke-width: 1; }
+.xsection .slope { stroke: var(--ok); stroke-width: 2; stroke-dasharray: 4 3; }
+.xsection .asp-floor { stroke: var(--bad); stroke-width: 1; stroke-dasharray: 6 4; }
+.xsection .asp-label { fill: var(--bad); font: 9px system-ui, sans-serif; }
+.xsection .glider { fill: var(--fg); }
+.xsection .xs-unknown { fill: var(--warn); font: 10px system-ui, sans-serif; }
+
+/* ---- ANA-001: the barograph, with the kernel's climbs shaded under it ---- */
+.barograph { width: 100%; background: #10141a; border: 1px solid #2a313c; border-radius: .5rem; }
+.barograph .baro-line { fill: none; stroke: var(--fg); stroke-width: 1.5; }
+.barograph .climb-band { fill: rgba(76, 175, 120, .18); }
+
+/* ---- CNC-003: a triangle whose shape the rules accept ---- */
+.badge.ready { display: inline-block; margin-left: .3rem; padding: .1rem .3rem; border-radius: .25rem; background: var(--ok); color: #0b0d10; font-size: .55rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; vertical-align: middle; }

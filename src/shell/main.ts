@@ -30,6 +30,12 @@ import {
   RULES, simpleTask, freshProgress, advance, freshAat, advanceAat, scoredDistanceM,
   type Task, type TaskProgress, type Waypoint, type AatProgress,
 } from '../core/task';
+import { reachable, type ReachRay } from '../core/reach';
+import { varioTone, stfTone } from '../core/vartone';
+import { barograph, effectiveGlide, climbs } from '../core/analysis';
+import { freeDistance, faiTriangle } from '../core/optimise';
+import { openAudio, type AudioOut } from './audio';
+import { xsectionSvg } from './xsection-ui';
 import { paintMap as paintMovingMap, type MapPaint2D } from './map-ui';
 import type { View as MapView } from './liftmap-ui';
 import { completeness, specFor, type Completeness, type PackSpec, type Held } from '../core/pack';
@@ -57,6 +63,7 @@ import { parseIGC } from 'soaring-core/igc';
 import { MIN_RATIOS } from 'soaring-core/lift/calib';
 import { LIFT_COMPS } from 'soaring-core/lift/mix';
 import type { Wx, WxKnobs } from 'soaring-core/weather';
+import type { TrackPoint } from 'soaring-core/types';
 
 // The cache under everything (OFF-002), opened before the terrain store exists because the
 // store's very first read may already be a disk hit. openStore never throws — worst case the
@@ -98,9 +105,11 @@ root.innerHTML = `
   <nav class="tabs">
     <button id="tab-fly" class="active" type="button">Fly</button>
     <button id="tab-briefing" type="button">Briefing</button>
+    <button id="tab-analysis" type="button">Analysis</button>
   </nav>
   <div id="fly"></div>
   <div id="briefing" hidden></div>
+  <div id="analysis" hidden></div>
 `;
 const app = root.querySelector<HTMLElement>('#fly')!;
 const bf = root.querySelector<HTMLElement>('#briefing')!;
@@ -148,6 +157,11 @@ app.innerHTML = `
       <button id="zoom-out" type="button">−</button>
     </div>
   </div>
+  <div id="xsection" class="xsection-frame"></div>
+  <form id="audio-set" class="fly-set">
+    <button id="audio-on" type="button" title="VAR-004: the vario, out loud. Browsers only allow sound after a click — this is that click.">🔇 audio off</button>
+    <label><input id="audio-stf" type="checkbox" /> speed-to-fly mode (VAR-005)</label>
+  </form>
   <form id="connect">
     <select id="linksel">${offered.map(l => `<option value="${l}">${l.toUpperCase()}</option>`).join('')}</select>
     <input id="host" value="127.0.0.1" size="12" />
@@ -218,6 +232,8 @@ let taskProgress: TaskProgress | null = null;
 let aat: AatProgress | null = null;                // TSK: best scoring fixes per assigned area
 const trail: [number, number][] = [];              // CAR: the recent track
 let mapWidthM = 20_000;                            // CAR: zoom, metres across the canvas
+let audio: AudioOut | null = null;                 // VAR-004/005: null = silent, and it SAYS so
+const flightTrack: TrackPoint[] = [];              // ANA/CNC: the flight, for the analysis tab
 
 const setting = (id: string, fallback: number): number => {
   const v = Number((app.querySelector(id) as HTMLInputElement).value);
@@ -286,21 +302,46 @@ function taskHtml(): string {
     taskProgress.next >= task.points.length ? ' — COMPLETE' : ''}</div>`;
 }
 
-/** CAR: repaint the canvas from the current state. Called from render, cheap at 1 Hz. */
+/** CAR + TER-005: repaint the canvas from the current state. Called from render, cheap at
+ *  1 Hz — the reach march is 72 bearings over a cached tile lookup. */
 function repaintMap(s: NavState): void {
   const canvasEl = app.querySelector<HTMLCanvasElement>('#map');
   if (!canvasEl) return;
   const ctx = canvasEl.getContext('2d') as unknown as MapPaint2D;
   const centre = s.fix ? { lon: s.fix.lon, lat: s.fix.lat } : { lon: 8, lat: 47 };
   const view: MapView = { centre, widthM: mapWidthM, wPx: canvasEl.width, hPx: canvasEl.height };
-  // The still-air range: AGL × best-glide L/D, no wind. The painter stamps the assumption
-  // on the canvas; a range ring without its label is a promise the polar never made.
+  // The still-air range: AGL × best-glide L/D, no wind. It is the FALLBACK now — kept only
+  // for when the reach cannot be marched, and still stamped with its assumption.
   const ld = glideRatio(polar, speedToFly(polar, 0));
   const rangeM = s.agl != null && ld != null && s.agl > 0 ? s.agl * ld : null;
+
+  // TER-005/PLA-007: the reach over the terrain actually in the way, priced against the wind
+  // we estimated. Needs an altitude — without one there is no glide slope to march.
+  let reach: ReachRay[] | null = null;
+  if (s.fix?.alt != null) {
+    const w = estimator.estimate() ?? s.reportedWind ?? null;
+    reach = reachable(elev, s.fix.lon, s.fix.lat, s.fix.alt, polar, {
+      wind: w, safetyM: setting('#set-reserve', 200),
+    });
+    // Every ray blocked at zero means the DEM holds nothing here: an empty polygon painted as
+    // a reach would say "you can go nowhere", which is a claim, not an absence.
+    if (reach.every(r => r.distanceM === 0)) reach = null;
+  }
   paintMovingMap(ctx, view, {
     state: s, trail, spaces, traffic: traffic.picture(s.fix?.sod ?? 0),
-    goal: goal ? { lon: goal.lon, lat: goal.lat } : null, rangeM,
+    goal: goal ? { lon: goal.lon, lat: goal.lat } : null, rangeM, reach,
   });
+
+  // ANA-002: the slice straight ahead — the dimension the plan view flattens away.
+  const xs = app.querySelector<HTMLElement>('#xsection');
+  if (xs && s.fix?.alt != null && s.track != null) {
+    xs.innerHTML = xsectionSvg({
+      lon: s.fix.lon, lat: s.fix.lat, bearing: s.track, altM: s.fix.alt,
+      rangeM: Math.min(mapWidthM, 30_000), glideRatio: ld, elev, spaces,
+    });
+  } else if (xs) {
+    xs.innerHTML = '';                      // no track, no slice: nothing to draw ahead of
+  }
 }
 
 function render(s: NavState, link: LinkState): void {
@@ -538,6 +579,20 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
   el.value = settings.monitoredClasses?.join(', ') ?? '';
   render(state, link);
 };
+// VAR-004: the browser refuses sound before a gesture, and that refusal is not a bug to work
+// around — this button IS the gesture. A platform with no audio out says so (the spec's own
+// "LÀ OÙ une sortie audio est disponible") rather than pretending to sing.
+(app.querySelector('#audio-on') as HTMLButtonElement).onclick = e => {
+  const btn = e.target as HTMLButtonElement;
+  if (audio?.running) {
+    audio.stop();
+    audio = null;
+    btn.textContent = '🔇 audio off';
+    return;
+  }
+  audio = openAudio();
+  btn.textContent = audio ? '🔊 audio on' : 'no audio output on this platform';
+};
 (app.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => { mapWidthM = Math.max(2000, mapWidthM / 1.5); render(state, link); };
 (app.querySelector('#zoom-out') as HTMLButtonElement).onclick = () => { mapWidthM = Math.min(200_000, mapWidthM * 1.5); render(state, link); };
 /** ESP: adopt an OpenAir file's text. ESP-001's display starts as words; the map (CAR) draws
@@ -629,6 +684,19 @@ async function run(dev: Device): Promise<void> {
       if (logger && journal) journal.add(logger.drain());
       trail.push([state.fix.lon, state.fix.lat]);  // CAR: the tail the map draws
       if (trail.length > 600) trail.shift();       // ~10 min at 1 Hz
+      // ANA/CNC: the WHOLE flight, kept for the analysis tab. The trail above forgets after
+      // ten minutes because the map only draws a tail; the scorers need every fix there was.
+      if (state.fix.alt != null)
+        flightTrack.push([state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod]);
+      // VAR-004/005: the air, out loud. In speed-to-fly mode the tone says how to fly rather
+      // than how the air moves — the same speaker, the opposite meaning, so only one plays.
+      if (audio?.running) {
+        const d = derive(state, polar, setting('#set-qnh', 1013.25));
+        const stfMode = (app.querySelector('#audio-stf') as HTMLInputElement).checked;
+        audio.setTone(stfMode && d.tas != null
+          ? stfTone(d.tas - speedToFly(polar, setting('#set-mc', 1), d.netto ?? 0))
+          : varioTone(state.vario));
+      }
       if (task && taskProgress) {                  // TSK: the folds, fix by fix
         taskProgress = advance(task, taskProgress, state.fix.lon, state.fix.lat, state.fix.sod);
         // AAT scoring runs AFTER advance on the same fix, by advanceAat's own contract:
@@ -1168,11 +1236,15 @@ onTilesChanged = () => {
 
 const tabFly = root.querySelector<HTMLButtonElement>('#tab-fly')!;
 const tabBf = root.querySelector<HTMLButtonElement>('#tab-briefing')!;
-function showTab(which: 'fly' | 'briefing'): void {
+const tabAna = root.querySelector<HTMLButtonElement>('#tab-analysis')!;
+function showTab(which: 'fly' | 'briefing' | 'analysis'): void {
   app.hidden = which !== 'fly';
   bf.hidden = which !== 'briefing';
+  ana.hidden = which !== 'analysis';
   tabFly.classList.toggle('active', which === 'fly');
   tabBf.classList.toggle('active', which === 'briefing');
+  tabAna.classList.toggle('active', which === 'analysis');
+  if (which === 'analysis') renderAnalysis();
   if (which === 'briefing') {
     // The form opens already pointed at where the glider is — prefilled from the last fix,
     // but only into EMPTY inputs: a centre the pilot typed is the pilot's.
@@ -1188,6 +1260,82 @@ function showTab(which: 'fly' | 'briefing'): void {
 }
 tabFly.onclick = () => showTab('fly');
 tabBf.onclick = () => showTab('briefing');
+tabAna.onclick = () => showTab('analysis');
+
+// ============ the Analysis screen — Phase 6 (ANA-001/003, CNC-001/002/003) ============
+// Everything here is ABOUT a flight, and every number on it is either a measurement of what
+// happened or a score under a NAMED barème. The distinction ANA-003 turns on is the one the
+// whole app turns on: the achieved glide ratio is a fact, the polar's is a claim about the
+// glider, and they are shown side by side rather than fused into a single flattering number.
+
+const ana = root.querySelector<HTMLElement>('#analysis')!;
+
+/** The barograph, as an SVG. Altitude against time, and the climbs the kernel found marked
+ *  under it — the day's real work, where it came from. */
+function barographSvg(track: TrackPoint[], wPx = 640, hPx = 200): string {
+  const b = barograph(track);
+  if (!b) return '<div class="link">No flight yet — connect, or replay an IGC, and come back.</div>';
+  const span = Math.max(1, b.endSod - b.startSod);
+  const lo = b.minAltM - 50, hi = b.maxAltM + 50;
+  const x = (sod: number): number => ((sod - b.startSod) / span) * wPx;
+  const y = (m: number): number => hPx - ((m - lo) / Math.max(1, hi - lo)) * hPx;
+  const line = b.samples.map(([t, m]) => `${x(t).toFixed(1)} ${y(m).toFixed(1)}`).join(' L ');
+  // The climbs, as bands under the trace: where the height came from, in the kernel's own
+  // judgement of what counts as a climb (C4 — we do not re-decide it here).
+  const bands = climbs(track).map(c =>
+    `<rect class="climb-band" x="${x(b.startSod + c.t0).toFixed(1)}" y="0"
+       width="${Math.max(1, x(b.startSod + c.t1) - x(b.startSod + c.t0)).toFixed(1)}" height="${hPx}"/>`).join('');
+  return `<svg class="barograph" viewBox="0 0 ${wPx} ${hPx}" width="${wPx}" height="${hPx}">
+    ${bands}<path class="baro-line" d="M ${line}"/></svg>`;
+}
+
+function renderAnalysis(): void {
+  const track = flightTrack;
+  if (track.length < 2) {
+    ana.innerHTML = `<h1>VOLPLANE — analysis</h1>
+      <div class="link">No flight yet — connect to Condor, or replay an IGC on the Fly screen,
+      and this screen fills itself from the fixes as they arrive.</div>`;
+    return;
+  }
+  const b = barograph(track)!;
+  // ANA-003, wind-corrected when we have a wind of our own: the ratio is then a claim about
+  // the GLIDER rather than about the day. The badge says which it is, because they are not
+  // the same number and a pilot comparing gliders must know which he is reading.
+  const wind = estimator.estimate() ?? null;
+  const eg = effectiveGlide(track, polar, wind);
+  const free = freeDistance(track);
+  const fai = faiTriangle(track);
+  const km = (m: number | null | undefined): string | null => m == null ? null : (m / 1000).toFixed(1);
+
+  ana.innerHTML = `
+    <h1>VOLPLANE — analysis</h1>
+    <div class="boxes">
+      ${box('Max altitude', fmt(b.maxAltM), 'm')}
+      ${box('Height gained', fmt(b.gainM), 'm')}
+      ${box('Climbs', fmt(climbs(track).length))}
+      ${box('Achieved L/D', fmt(eg.achievedLD, 1), '',
+            eg.windCorrected ? '' : ' <span class="badge estimated" title="ground distance, no wind estimate yet — a downwind glide flatters it">uncorr.</span>')}
+      ${box('Polar L/D', fmt(eg.theoreticalLD, 1), '',
+            ' <span class="badge modelled" title="what the polar claims — a model of the glider, not a measurement of this flight">modelled</span>')}
+      ${box('Achieved / book', fmt(eg.ratio, 2))}
+    </div>
+    <h2>Scoring — ${free?.rules ?? fai?.rules ?? 'olc-2024'}</h2>
+    <div class="boxes">
+      ${box('Free distance', km(free?.distanceM ?? null), 'km')}
+      ${box('Free points', fmt(free?.points ?? null, 1))}
+      ${box('FAI triangle', km(fai?.distanceM ?? null), 'km')}
+      ${box('FAI points', fmt(fai?.points ?? null, 1))}
+      ${box('Shortest leg', fai ? (fai.minLegFraction * 100).toFixed(1) : null, '%',
+            fai ? ' <span class="badge ready" title="CNC-003: the 28% shape rule is satisfied — the search only ever returns legal triangles">FAI ok</span>' : '')}
+    </div>
+    <div class="link">A cockpit estimate on a decimated track (CNC). The IGC file, scored by
+      the league's own software, is the judge of record — this number is for flying by, not
+      for claiming with.</div>
+    <h2>Barograph</h2>
+    ${barographSvg(track)}
+    <div class="link">Shaded: the climbs, as soaring-core's detector found them.</div>
+  `;
+}
 
 // ---- what came back from disk (OFF-002) ----
 

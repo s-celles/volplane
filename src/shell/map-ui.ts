@@ -8,6 +8,7 @@ import { project, type Paint2D, type View } from './liftmap-ui';
 import type { NavState } from '../core/nav';
 import type { Airspace } from '../core/airspace';
 import type { Traffic } from '../core/flarm';
+import type { ReachRay } from '../core/reach';
 import { mPerLng, M_PER_LAT } from 'soaring-core/geo';
 
 export interface MapPaint2D extends Paint2D {
@@ -29,15 +30,30 @@ export interface MapInput {
   traffic: readonly Traffic[];
   goal: { lon: number; lat: number } | null;
   /** Still-air glide range (m over ground) at the current height in hand, or null when the
-   *  AGL or the polar cannot say. The label states the assumption; the CIRCLE must too. */
+   *  AGL or the polar cannot say. The label states the assumption; the CIRCLE must too.
+   *  Drawn ONLY when `reach` is absent — the circle is the fallback, not the truth. */
   rangeM: number | null;
+  /** TER-005: the reach polygon over the terrain actually in the way, one ray per bearing.
+   *  When present it SUPERSEDES the circle, because the circle is wrong wherever a ridge
+   *  stands — and it is wrong in exactly the direction that kills. */
+  reach?: readonly ReachRay[] | null;
 }
 
 export const RANGE_LABEL = 'range: still air, no wind';
+export const REACH_LABEL = 'reach: over terrain, wind included';
+
+/** The reach edge's colour says WHY it ends there — the TER-005 distinction, carried to the
+ *  pixel. Green: the glide simply ran out. Red: a ridge is in the way, and everything behind
+ *  it is unreachable however low it lies. Grey: nobody has loaded that ground. */
+const LIMIT_COLOR: Record<ReachRay['limit'], string> = {
+  glide: '#4caf78',
+  terrain: '#e05252',
+  unknown: '#8b93a1',
+};
 
 /** Paint the map, centred on the glider (or the view centre when there is no fix yet). */
 export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
-  const { state: s, trail, spaces, traffic, goal, rangeM } = input;
+  const { state: s, trail, spaces, traffic, goal, rangeM, reach } = input;
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#10141a';
   ctx.fillRect(0, 0, view.wPx, view.hPx);
@@ -63,10 +79,34 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
     }
   }
 
-  // The glide range: a circle of still air around the glider. Dashed by alpha (the 2D
-  // recorder has no setLineDash) and labelled with its assumption — an unlabelled range
-  // ring is a promise the polar never made.
-  if (rangeM != null && s.fix) {
+  // The reach, when the terrain has been marched (TER-005). Each edge segment is drawn in the
+  // colour of ITS OWN limit, so a red arc is not decoration: it is a wall, and the ground
+  // behind it cannot be had. This is the whole reason the circle below is only a fallback.
+  if (reach && reach.length > 1 && s.fix) {
+    ctx.globalAlpha = 0.75;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < reach.length; i++) {
+      const a = reach[i], b = reach[(i + 1) % reach.length];
+      const [x1, y1] = project(view, a.lon, a.lat);
+      const [x2, y2] = project(view, b.lon, b.lat);
+      // The segment wears the WORSE of its two ends: an edge running from open glide into a
+      // ridge is part of the wall, and rounding it down to green would sell the mountain.
+      const worst = a.limit === 'terrain' || b.limit === 'terrain' ? 'terrain'
+        : a.limit === 'unknown' || b.limit === 'unknown' ? 'unknown' : 'glide';
+      ctx.strokeStyle = LIMIT_COLOR[worst];
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#8b93a1';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillText(REACH_LABEL, 8, 16);
+  } else if (rangeM != null && s.fix) {
+    // The fallback circle: still air, no terrain. It is drawn ONLY when the reach could not
+    // be marched, and it keeps saying out loud what it assumes — an unlabelled range ring is
+    // a promise the polar never made.
     const [x, y] = project(view, s.fix.lon, s.fix.lat);
     ctx.strokeStyle = '#4caf78';
     ctx.globalAlpha = 0.5;
