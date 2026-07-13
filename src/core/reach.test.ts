@@ -47,6 +47,19 @@ test('a ridge cuts the glide short AND says it was the ridge (TER-005)', () => {
   expect(overFlat.distanceM).toBeGreaterThan(ray.distanceM * 2);
 });
 
+test('flat ground BELOW the glider is where the glide ran out — never a "ridge in the way"', () => {
+  // The ridge test used to read `g + safetyM > alt - safetyM`, counting the clearance on both
+  // sides: any ground less than 2 × safetyM under the glider came back as 'terrain'. With the
+  // reserve the pilot actually sets (200 m), dead-flat ground 200 m below him was reported as a
+  // mountain standing in his way — and everything behind it as unreachable.
+  const ray = reachOnBearing(flat, LON, LAT, 200, PL, 90, { safetyM: 200, stepM: 100 });
+  expect(ray.limit).toBe('glide');          // the glide ends here; nothing is IN THE WAY
+  // The same march over a wall that really does stand above him still says 'terrain'. The
+  // distinction is preserved, not weakened — that is the whole of TER-005.
+  const blocked = reachOnBearing(ridge, LON, LAT, 1500, PL, 90, { safetyM: 200, stepM: 100 });
+  expect(blocked.limit).toBe('terrain');
+});
+
 test('unloaded ground is UNKNOWN — not reachable, not unreachable (POT-007)', () => {
   const ray = reachOnBearing(unknown, LON, LAT, 1500, PL, 90, { stepM: 100 });
   expect(ray.limit).toBe('unknown');

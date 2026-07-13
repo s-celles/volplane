@@ -19,7 +19,7 @@ import { igcToSentences } from '../core/replay';
 import { derive, rollingVario } from '../core/compute';
 import { speedToFly, arrival, glideRatio } from '../core/glide';
 import { windEstimator } from '../core/wind';
-import { parsePflau, parsePflaa, trafficStore, SEE_AND_AVOID, type FlarmStatus } from '../core/flarm';
+import { parsePflau, parsePflaa, trafficStore, freshStatus, type FlarmStatus } from '../core/flarm';
 import { igcLogger, type IgcLogger } from '../core/igclog';
 import { openJournal, recoverOrphan, clearJournal, type Journal } from './igcjournal';
 import {
@@ -27,15 +27,25 @@ import {
   type Airspace, type Ack,
 } from '../core/airspace';
 import {
-  RULES, simpleTask, freshProgress, advance, freshAat, advanceAat, scoredDistanceM,
+  RULES, simpleTask, freshProgress, advance, freshAat, advanceAat,
   type Task, type TaskProgress, type Waypoint, type AatProgress,
 } from '../core/task';
+import { taskStats } from '../core/taskstats';
+import { taskRibbonHtml } from './task-ui';
 import { reachable, type ReachRay } from '../core/reach';
 import { parsePeaks, parseShapes } from '../core/landmarks';
 import { parsePoiFile, isLandable, LANDABLE_CATS, type Poi, type PoiCat } from '../core/cup';
 import { alternates, landablesWithin, DEFAULT_RADIUS_M, type Alternate } from '../core/landables';
 import { alternatesHtml, styleFilterHtml } from './landables-ui';
 import { varioTone, stfTone } from '../core/vartone';
+import { chooseVoice } from '../core/alarmtone';
+import { circlingTracker } from '../core/circling';
+import { circleRose } from '../core/circleassist';
+import {
+  terrainAhead, terrainAlarm, DEFAULT_HORIZON_S, type TerrainVerdict,
+} from '../core/terrainalarm';
+import { alertsHtml, trafficPanelHtml } from './alerts-ui';
+import { roseSvg } from './rose-ui';
 import { barograph, effectiveGlide, climbs } from '../core/analysis';
 import { freeDistance, faiTriangle } from '../core/optimise';
 import { openAudio, type AudioOut } from './audio';
@@ -43,7 +53,7 @@ import { xsectionSvg } from './xsection-ui';
 import { paintMap as paintMovingMap, type MapPaint2D } from './map-ui';
 import type { View as MapView } from './liftmap-ui';
 import { completeness, specFor, type Completeness, type PackSpec, type Held } from '../core/pack';
-import { normalizeSettings, activePolar, type Settings } from '../core/config';
+import { normalizeSettings, activePolar, fieldNumber, type Settings } from '../core/config';
 import { upsertPack, touchPack, setPinned, removePack, sortedShelf, updateOffers, type Shelf } from '../core/shelf';
 import type { EvictionPlan } from '../core/cachebudget';
 import { briefingAt, sandboxWx, type Provenance } from '../core/briefing';
@@ -172,6 +182,8 @@ app.innerHTML = `
     <label>MC <input id="set-mc" size="3" value="1.0" inputmode="decimal" /> m/s</label>
     <label>QNH <input id="set-qnh" size="5" value="1013.25" inputmode="decimal" /> hPa</label>
     <label>reserve <input id="set-reserve" size="4" value="200" inputmode="numeric" /> m</label>
+    <label title="TER-008: how far AHEAD the terrain alarm looks, in seconds — time is what the pilot can act on, metres are not">terrain horizon
+      <input id="set-horizon" size="3" value="60" inputmode="numeric" /> s</label>
     <button id="set-goal" type="button" title="make the current position and ground the final-glide goal">goal: here</button>
     <span id="goal-label" class="goal-label">no goal</span>
     <button id="rec" type="button" title="record the flight as an IGC file (LOG)">● record</button>
@@ -180,6 +192,8 @@ app.innerHTML = `
     <label class="replay" title="TSK: waypoints as 'name,lon,lat[,aat]' lines — start first, finish last, fai-2024 sectors; 'aat' marks an assigned area">task (CSV)
       <input id="tsk" type="file" accept=".csv,.txt" /></label>
     <span id="tsk-label" class="goal-label"></span>
+    <label class="replay" title="TSK-007/TSK-006: the organisers' task time — the minimum time on an AAT, the target time on a racing task. The REQUIRED speed is priced against it, on any task. Left empty it is UNKNOWN, not zero, and those figures read as dashes: the app admitting nobody told it.">task time
+      <input id="set-mintime" size="4" value="" inputmode="numeric" /> min</label>
     <label class="replay" title="PLA-010: your glider's polar, as a WinPilot .plr file">polar (.plr)
       <input id="plr" type="file" accept=".plr,.txt" /></label>
     <span id="plr-label" class="polar-label"></span>
@@ -199,6 +213,7 @@ app.innerHTML = `
     </div>
   </div>
   <div id="xsection" class="xsection-frame"></div>
+  <div id="rose" class="rose-frame"></div>
   <form id="audio-set" class="fly-set">
     <button id="audio-on" type="button" title="VAR-004: the vario, out loud. Browsers only allow sound after a click — this is that click.">🔇 audio off</button>
     <label><input id="audio-stf" type="checkbox" /> speed-to-fly mode (VAR-005)</label>
@@ -219,6 +234,7 @@ app.innerHTML = `
     notYet.length ? ` Not yet drivable in this build: ${notYet.join(', ')}.` : ''}</div>
 `;
 const flyView = app.querySelector<HTMLElement>('#fly-view')!;
+const roseEl = app.querySelector<HTMLElement>('#rose')!;
 const linkSel = app.querySelector<HTMLSelectElement>('#linksel')!;
 const hostIn = app.querySelector<HTMLInputElement>('#host')!;
 // UDP listens; it has no host to ask for. The field follows the selected link.
@@ -240,13 +256,29 @@ function box(k: string, v: string | null, u = '', badge = ''): string {
 // one that is — every glide call below reads this binding, so importing a .plr swaps the
 // whole computer's polar in one assignment.
 let polar: Polar = activePolar(settings);
-const estimator = windEstimator();                 // VEN-001: OUR wind, never merged with theirs
-const avgVario = rollingVario(30);                 // POS-006
+// Everything below is PER-FLIGHT memory, and it is `let` for one reason: a new source is a new
+// flight, and these must be thrown away with the old one (see resetFlight). They used to be
+// const — created once at module load and never cleared — which meant that after replaying an
+// afternoon log the accumulators held sods around 50000, and every live fix of the next morning's
+// flight (sods around 32000) failed their own "the clock must advance" guard and was silently
+// dropped. The screen went on showing the replayed flight's last thermal, in plain measured
+// styling, as the current one.
+let estimator = windEstimator();                   // VEN-001: OUR wind, never merged with theirs
+let avgVario = rollingVario(30);                   // POS-006
+let circles = circlingTracker();                   // VAR-006: the last thermal, the last circle
+let rose = circleRose();                           // THE-001/002: where the lift was, around the turn
 let goal: { lon: number; lat: number; elev: number } | null = null;
 
+// TER-008. The alarm is JUDGED ONCE, on the fix, and SHOWN twice — the banner reads it and so
+// does the speaker — exactly as `alts`/`altScope` are judged once and drawn twice. Recomputing
+// the march inside render() would be a second opinion about the same rock, and two opinions
+// about a rock is how a screen and a speaker come to disagree about whether to turn.
+let terrAlarm = terrainAlarm();
+let verdict: TerrainVerdict = { kind: 'clear' };
+
 // ---- Phase 4: traffic, the logger, the airspace ----
-const traffic = trafficStore();                    // FLM: the picture, aged on read
-let flarm: FlarmStatus | null = null;              // FLM: the instrument's own judgement
+let traffic = trafficStore();                      // FLM: the picture, aged on read
+let flarm: FlarmStatus | null = null;              // FLM: the instrument's own judgement, aged on read
 let logger: IgcLogger | null = null;               // LOG: recording when non-null
 let journal: Journal | null = null;                // SYS-001: the on-disk copy of the recording
 let orphanBanner: HTMLElement | null = null;       // SYS-001: the recovered-flight offer, if up
@@ -300,35 +332,63 @@ let alts: Alternate[] = [];
 let altScope: { radiusM: number; judged: number; inRadius: number } | null = null;
 const flightTrack: TrackPoint[] = [];              // ANA/CNC: the flight, for the analysis tab
 
-const setting = (id: string, fallback: number): number => {
-  const v = Number((app.querySelector(id) as HTMLInputElement).value);
-  return Number.isFinite(v) ? v : fallback;
-};
+/** A new source is a NEW FLIGHT, and every memory of the old one goes with it.
+ *
+ *  Nothing here is a preference: the wind estimate, the 30-second average, the last thermal, the
+ *  rose, the terrain hold, the traffic, the trail, the analysis track are all claims about ONE
+ *  flight, and there is no honest way to carry any of them across a Connect or a replay. Left
+ *  standing they do not merely go stale — they go stale INVISIBLY: the boxes wear no `est` badge
+ *  and dim only with the link, so the previous flight's last thermal reads exactly like this
+ *  one's, and (because every accumulator refuses a fix that does not advance its clock) a replay
+ *  of a later flight than the live one would freeze them there for good.
+ *
+ *  The files the pilot loaded — task, airspace, landables, polar, goal — are NOT flight memory
+ *  and stay: he chose them, and choosing a source is not unchoosing them. */
+function resetFlight(): void {
+  estimator = windEstimator();
+  avgVario = rollingVario(30);
+  circles = circlingTracker();
+  rose = circleRose();
+  terrAlarm = terrainAlarm();
+  traffic = trafficStore();
+  verdict = { kind: 'clear' };
+  flarm = null;
+  trail.length = 0;
+  flightTrack.length = 0;
+  state = EMPTY;
+}
+
+/** What the pilot typed, or the field's documented default. The parse is core's (fieldNumber),
+ *  and it is core's because it is not the one-liner it looks like: an EMPTY box reads as 0 in
+ *  every browser, `Number.isFinite(0)` is true, and this function used to hand that 0 on as if
+ *  the pilot had chosen it. A backspaced terrain horizon then disabled the terrain alarm for the
+ *  rest of the flight with nothing on screen saying so.
+ *
+ *  `min` names the fields where zero is not a value the pilot can have meant: a horizon of 0 s is
+ *  not a short horizon, it is no alarm; a QNH of 0 hPa is not a low pressure, it is no altimeter
+ *  setting. The reserve and MC keep no minimum — a pilot may legitimately fly MC 0, and a reserve
+ *  of 0 m is a choice, if a bold one, that he has to type on purpose. */
+const setting = (id: string, fallback: number, min?: number): number =>
+  fieldNumber((app.querySelector(id) as HTMLInputElement).value, fallback, min);
+
+/** The organisers' task time, in seconds — and the one setting on this screen that has no
+ *  fallback, because there is nothing to fall back TO. Every other field here has a defensible
+ *  default (a reserve of 200 m, a horizon of 60 s); a task time does not, it is a number
+ *  the organisers set and nobody else knows. An empty field is therefore UNKNOWN, and unknown is
+ *  null — never 0, which would be a minimum time already expired and would price a required
+ *  speed against it. The AAT figures dash out instead, which is the app admitting it was not
+ *  told (POT-007). */
+function minTaskTimeS(): number | null {
+  const raw = (app.querySelector('#set-mintime') as HTMLInputElement).value.trim();
+  if (raw === '') return null;
+  const min = Number(raw);
+  return Number.isFinite(min) && min > 0 ? min * 60 : null;
+}
 
 /** The ESTIMATED badge (VEN-001). Same loud honesty as the briefing's MODELLED: this wind is
  *  our inference from circle drift, not the instrument's measurement, and the two must never
  *  wear the same label. */
 const EST_BADGE = ' <span class="badge estimated" title="from circle drift — an estimate, not the instrument">est</span>';
-
-/** FLM: the alarm and the picture, never without FLM-005's sentence. Shown only once a
- *  FLARM has spoken — a permanently empty traffic panel would teach the eye to skip it. */
-function flarmHtml(s: NavState): string {
-  if (!flarm) return '';
-  const pic = traffic.picture(s.fix?.sod ?? 0);
-  const rows = pic.slice(0, 5).map(t => {
-    const dist = Math.hypot(t.relNorth, t.relEast);
-    const vert = t.relVertical != null ? `${t.relVertical > 0 ? '+' : ''}${t.relVertical.toFixed(0)} m` : '—';
-    return `<div class="traffic-row alarm-${t.alarm}">${t.id} · ${(dist / 1000).toFixed(1)} km · ${vert}${
-      t.climbRate != null ? ` · ${t.climbRate.toFixed(1)} m/s` : ''}</div>`;
-  }).join('');
-  return `<div class="flarm alarm-${flarm.alarm}">
-    <div class="flarm-status">FLARM${flarm.alarm ? ` — ALARM ${flarm.alarm}${
-      flarm.bearing != null ? `, ${flarm.bearing > 0 ? '+' : ''}${flarm.bearing}°` : ''}${
-      flarm.relDistance != null ? `, ${flarm.relDistance} m` : ''}` : ` — ${flarm.rx} heard`}</div>
-    ${rows}
-    <div class="see-avoid">${SEE_AND_AVOID}</div>
-  </div>`;
-}
 
 /** ESP: the verdicts for now. 'inside' and 'predicted' never share a colour (ESP-003), and a
  *  worst-cased vertical says so in words (ESP-005). The verdicts are computed over ALL
@@ -350,21 +410,19 @@ function airspaceHtml(s: NavState): string {
   ).join('')}</div>`;
 }
 
-/** TSK: the declared task's live state — which point is next, which are turned, and what
- *  the flight has SCORED so far (TSK-003). The scored distance is null before the start
- *  validates, and null renders as the dash: an unstarted task has no scored distance, and
- *  showing 0.0 km would be a fake zero (POT-007). */
-function taskHtml(): string {
-  if (!task || !taskProgress) return '';
-  const rows = task.points.map((p, i) => {
-    const done = taskProgress!.validatedAt[i] != null;
-    const current = i === taskProgress!.next;
-    return `<span class="tsk-pt${done ? ' done' : ''}${current ? ' current' : ''}">${p.wp.name}</span>`;
-  }).join(' → ');
-  const scored = aat ? scoredDistanceM(task, taskProgress, aat) : null;
-  return `<div class="tsk">Task (${task.rules}): ${rows} — scored ${
-    scored == null ? '—' : `${(scored / 1000).toFixed(1)} km`}${
-    taskProgress.next >= task.points.length ? ' — COMPLETE' : ''}</div>`;
+/** TSK-007: the declared task's live state, and now the other half of it — not only what the
+ *  flight has scored but what the task still OWES. The figures are core's (taskstats), the words
+ *  are task-ui's; this function's whole job is to hand one the other's answer.
+ *
+ *  Every figure is priced from THIS fix, and without a fix there is nothing to price from: the
+ *  stats are null and the ribbon dashes out rather than remembering yesterday's ETA. */
+function taskHtml(s: NavState): string {
+  const stats = task && taskProgress && aat
+    ? taskStats(task, taskProgress, aat,
+                s.fix ? { lon: s.fix.lon, lat: s.fix.lat, sod: s.fix.sod } : null,
+                { minTaskTimeS: minTaskTimeS() })
+    : null;
+  return taskRibbonHtml(task, taskProgress, aat, stats);
 }
 
 /** CAR + TER-005: repaint the canvas from the current state. Called from render, cheap at
@@ -448,7 +506,7 @@ function computeAlternates(s: NavState): Alternate[] {
 
 function render(s: NavState, link: LinkState): void {
   const mc = setting('#set-mc', 1);
-  const qnh = setting('#set-qnh', 1013.25);
+  const qnh = setting('#set-qnh', 1013.25, 1);
   const reserve = setting('#set-reserve', 200);
   const d = derive(s, polar, qnh);
   const estWind = estimator.estimate();
@@ -478,6 +536,10 @@ function render(s: NavState, link: LinkState): void {
   // its radius, and the number it did not march is not a footnote — it is the difference between
   // "nothing is reachable" and "nothing I looked at is reachable".
   alts = computeAlternates(s);
+  // FLM: the instrument's judgement, AGED on read — the same law, and the same clock, as the
+  // traffic picture two lines below it. A FLARM that has stopped speaking has stopped judging,
+  // and its last word must not stay on the screen as a live one.
+  const fl = freshStatus(flarm, s.fix?.sod ?? 0);
   const inRadius = s.fix ? landablesWithin(cup, s.fix.lon, s.fix.lat).length : 0;
   altScope = cup.length && s.fix
     ? { radiusM: DEFAULT_RADIUS_M, judged: alts.length, inRadius }
@@ -492,6 +554,8 @@ function render(s: NavState, link: LinkState): void {
       ${box('Height AGL', fmt(s.agl), 'm')}
       ${box('Vario', fmt(s.vario, 1), 'm/s')}
       ${box('Avg 30 s', fmt(avgVario.average(), 1), 'm/s')}
+      ${box('Last thermal', fmt(circles.lastThermal()?.avgMs ?? null, 1), 'm/s')}
+      ${box('Last circle', fmt(circles.lastCircle()?.avgMs ?? null, 1), 'm/s')}
       ${box('Netto', fmt(d.netto, 1), 'm/s')}
       ${box('TAS', fmt(d.tas && d.tas * 3.6), 'km/h')}
       ${box('Ground speed', fmt(s.groundSpeed && s.groundSpeed * 3.6), 'km/h')}
@@ -503,9 +567,10 @@ function render(s: NavState, link: LinkState): void {
       ${goal ? box(`Arrival <span class="goal-hint" title="${windUsed}">▸ goal</span>`,
                    fmt(arr && arr.height), 'm') : ''}
     </div>
-    ${flarmHtml(s)}
+    ${alertsHtml({ flarm: fl, terrain: verdict })}
+    ${trafficPanelHtml(fl, traffic.picture(s.fix?.sod ?? 0))}
     ${airspaceHtml(s)}
-    ${taskHtml()}
+    ${taskHtml(s)}
     <div id="alternates">${alternatesHtml({
       loaded: cup.length > 0,
       landableCount: cupLandables,
@@ -521,6 +586,11 @@ function render(s: NavState, link: LinkState): void {
     }${stale ? ' — values are the LAST RECEIVED, not current' : ''}${
       journal?.lastError ? ` — journal writes failing (${journal.lastError}): a crash now loses the whole flight` : ''}</div>
   `;
+  // THE-001/002: the rose lives OUTSIDE #fly-view, beside the cross-section, because it is a
+  // picture of the air and not a row of numbers. No branch here on "is he circling": a null rose
+  // draws its own refusal ("not circling — no rose"), which is the honest thing to say and the
+  // only thing this shell would have said anyway.
+  roseEl.innerHTML = roseSvg(rose.rose(s.fix?.sod ?? 0));
   repaintMap(s, stale);
 }
 
@@ -814,9 +884,35 @@ async function run(dev: Device): Promise<void> {
   stopCurrent?.();
   await closeLinks();
   if (gen !== runGen) return;                    // superseded while the old link was closing
+  // …and retire the old FLIGHT with it. The gen bump stops the loop; it does not empty the
+  // memories that loop filled, and a memory of another flight is not a stale number, it is a
+  // wrong one wearing no badge at all.
+  resetFlight();
   const watched = withHealth(dev.open(), s => {
     if (gen !== runGen) return;                  // a dead loop's link chip is nobody's news
-    link = s; render(state, link);
+    link = s;
+    // SYS-002, and the one place it does NOT mean "keep the last value". The boxes may age in
+    // place — a pilot mid-turn must not lose his numbers, and a dimmed altitude still says which
+    // altitude it was. An ALARM cannot be dimmed. It is a claim about the next thirty seconds,
+    // and the moment the instrument stops talking there is no evidence for it: the verdict and
+    // the voice are both computed per fix, so a link that dies mid-alarm would otherwise leave
+    // the banner lit and the speaker warbling for as long as the app is open, about a ridge the
+    // glider may have turned away from a minute ago. An alarm nobody can retract is an alarm the
+    // pilot learns to ignore. So the judgement is withdrawn with the fix that justified it.
+    //
+    // BOTH judgements. The FLARM status is the same kind of claim as the terrain verdict — "there
+    // is something in front of you, right now" — and withdrawing one while leaving the other lit
+    // was the same bug with a different banner: a full-intensity, undimmed "FLARM — ALARM 3" over
+    // a traffic list that had already aged to empty, with a silent speaker underneath it. Screen
+    // and speaker disagreeing about whether to turn is precisely what this branch exists to
+    // prevent. (freshStatus ages it out anyway once the clock moves on; this makes the retraction
+    // immediate, and survives a link that dies with the clock.)
+    if (s.state === 'silent' || s.state === 'closed') {
+      verdict = { kind: 'clear' };
+      flarm = null;
+      audio?.setVoice(null);
+    }
+    render(state, link);
   });
   // The whole flight computer, in one expression: a stream of sentences, a terrain sampler,
   // a driver. It does not know that Tauri, or a TCP socket, or Condor exist.
@@ -826,7 +922,9 @@ async function run(dev: Device): Promise<void> {
   async function* tee(src: AsyncIterable<string>): AsyncIterable<string> {
     for await (const line of src) {
       if (line.startsWith('$PFLAU')) {
-        const st = parsePflau(line);
+        // Stamped with the fix's own clock, exactly as the traffic is, so that a FLARM which
+        // stops speaking can be aged out instead of standing forever (freshStatus, below).
+        const st = parsePflau(line, state.fix?.sod ?? 0);
         if (st) flarm = st;
       } else if (line.startsWith('$PFLAA')) {
         const t = parsePflaa(line, state.fix?.sod ?? 0);
@@ -845,8 +943,36 @@ async function run(dev: Device): Promise<void> {
       terrain.ensure(state.fix.lon, state.fix.lat);
       // The estimator eats every fix; the averager only real vario samples, clocked by the
       // fix's own seconds — a replay must average exactly as the live flight did.
-      if (state.fix.alt != null) estimator.add(state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod);
+      // The estimator eats every fix with a height; so do the two new memories beside it, and
+      // for the same reason the averager is clocked by the fix's own seconds — a replay must
+      // remember exactly what the live flight remembered. VAR-006 needs the height (a climb is
+      // a height over a time); THE-001 needs it too, and takes the vario as it comes: a fix with
+      // no vario reading contributes NOTHING to the rose, and specifically not a zero.
+      if (state.fix.alt != null) {
+        estimator.add(state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod);
+        circles.add(state.fix.sod, state.fix.lon, state.fix.lat, state.fix.alt);
+        rose.add(state.fix.sod, state.fix.lon, state.fix.lat, state.fix.alt, state.vario ?? null);
+      }
       if (state.vario != null) avgVario.add(state.fix.sod, state.vario);
+      // TER-008: judged HERE, on the fix, and kept — the banner and the speaker below both read
+      // this one verdict. The wind is the wind IN USE, chosen exactly as the reach polygon and
+      // the alternates choose it, because an alarm priced against one wind beside a glide
+      // polygon priced against another is two computers arguing about the same ridge.
+      //
+      // What is NOT passed is `#set-reserve`. The pilot's final-glide reserve is a height he
+      // wants in hand at a field; handing it to a collision march made every metre within 200 m
+      // of the flight path a "ridge in the way", which over flat ground at circuit height is a
+      // permanent level-3 siren. The alarm keeps its own clearance (TERRAIN_CLEARANCE_M) and
+      // there is deliberately no knob here to feed the reserve back into.
+      //
+      // And it is told when the glider is CIRCLING, because then the straight ray this march
+      // flies is not the path the glider is on: thermalling beside a ridge, the track sweeps onto
+      // the rock once a turn, and chooseVoice would take the vario away for the whole climb.
+      verdict = terrAlarm.add(state.fix.sod, terrainAhead(elev, state, polar, {
+        horizonS: setting('#set-horizon', DEFAULT_HORIZON_S, 1),
+        circling: circles.circling(),
+        wind: estimator.estimate() ?? state.reportedWind ?? null,
+      }));
       logger?.add(state);                          // LOG: every fix, once per second
       // SYS-001: the journal drinks from the logger's cursor — the logger stays the ONE
       // encoder, the journal merely a second sink for the same records. add never throws
@@ -858,14 +984,27 @@ async function run(dev: Device): Promise<void> {
       // ten minutes because the map only draws a tail; the scorers need every fix there was.
       if (state.fix.alt != null)
         flightTrack.push([state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod]);
-      // VAR-004/005: the air, out loud. In speed-to-fly mode the tone says how to fly rather
-      // than how the air moves — the same speaker, the opposite meaning, so only one plays.
+      // VAR-004/005 and FLM-002: the air, out loud — and the alarms over the top of it. In
+      // speed-to-fly mode the tone says how to fly rather than how the air moves; either way it
+      // is the CRUISE voice, and an alarm supersedes it outright. One speaker, one voice, and
+      // the priority law is core/alarmtone's chooseVoice — not this loop. A shell that decided
+      // for itself whether the collision outranked the climb would be a second, untested alarm
+      // sitting on top of the tested one.
       if (audio?.running) {
-        const d = derive(state, polar, setting('#set-qnh', 1013.25));
+        const d = derive(state, polar, setting('#set-qnh', 1013.25, 1));
         const stfMode = (app.querySelector('#audio-stf') as HTMLInputElement).checked;
-        audio.setTone(stfMode && d.tas != null
+        const cruise = stfMode && d.tas != null
           ? stfTone(d.tas - speedToFly(polar, setting('#set-mc', 1), d.netto ?? 0))
-          : varioTone(state.vario));
+          : varioTone(state.vario);
+        // The FLARM level is read THROUGH freshStatus, never off the last-seen object: a FLARM
+        // that stops sending PFLAU mid-alarm would otherwise hold the top of the priority law
+        // forever, warbling over a threat that has passed and masking both the vario and a real
+        // TERRAIN alarm underneath it — an alarm nobody can retract.
+        audio.setVoice(chooseVoice({
+          flarm: freshStatus(flarm, state.fix.sod)?.alarm ?? 0,
+          terrain: verdict.kind === 'alarm' ? verdict.level : null,
+          cruise,
+        }));
       }
       if (task && taskProgress) {                  // TSK: the folds, fix by fix
         taskProgress = advance(task, taskProgress, state.fix.lon, state.fix.lat, state.fix.sod);

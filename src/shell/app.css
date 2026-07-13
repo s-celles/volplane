@@ -57,15 +57,52 @@ button { cursor: pointer; }
 .traffic-row.alarm-3 { color: var(--bad); }
 .see-avoid { margin-top: .3rem; font-size: .75rem; color: var(--dim); font-style: italic; }
 
+/* ---- FLM-002 + TER-008: the two banners that INTERRUPT. Everything else on this screen
+   answers a question the pilot asked; these two answer one he did not, about a thing that is
+   about to hit him — so they are the loudest objects in the app, and they are the only ones
+   allowed to be.
+
+   The terrain alarm is exactly as loud as the FLARM alarm, and it is deliberate: the ground
+   kills the same pilots the other glider does, and a rock warned about in a quieter voice is a
+   rock the eye triages second. They wear the SAME two levels, in the same two colours the
+   traffic panel already speaks (--warn at 2, --bad at 3) — one alarm vocabulary in this app,
+   learnt once. What tells the two banners apart is the WORD ("FLARM" / "TERRAIN") and the
+   escape it names, never the volume. ---- */
+.alert { margin-top: 1rem; padding: .6rem .8rem; border-radius: .5rem; background: #151920; font-size: .9rem; }
+.alert.alarm-2 { outline: 2px solid var(--warn); background: rgba(224, 160, 48, .12); }
+.alert.alarm-3 { outline: 3px solid var(--bad); background: rgba(224, 82, 82, .16); }
+.alert-head { font-weight: 700; letter-spacing: .06em; }
+.alert.alarm-2 .alert-head { color: var(--warn); }
+.alert.alarm-3 .alert-head { color: var(--bad); }
+.alert-dir { font-size: 1.1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.alert-detail { color: var(--dim); font-variant-numeric: tabular-nums; }
+
+/* TER-008's hard clause — "LÀ OÙ le relief est chargé". The ground ahead being UNLOADED is an
+   absence of measurement, not a danger, and it is styled as one: the same grey every other
+   unmeasured thing in this app wears (.lnd-unknown, the dashes in the boxes). It carries no
+   alarm colour, and it must never be given one — the day the "not loaded" note borrows the red
+   banner's clothes is the day the red banner stops being believed, and that is the one banner
+   that must never stop being believed. */
+.note.terrain-note { margin-top: .75rem; padding: .3rem .6rem; color: var(--dim); font-size: .8rem; }
+
 /* ---- CAR: the map and its zoom ---- */
 .map-frame { position: relative; margin-top: 1rem; max-width: 30rem; }
 .map-zoom { position: absolute; top: .5rem; right: .5rem; display: flex; flex-direction: column; gap: .25rem; }
 .map-zoom button { width: 2rem; padding: .2rem; }
 
-/* ---- TSK: the task ribbon ---- */
+/* ---- TSK-007: the task ribbon — what is turned, and what the task still owes ---- */
 .tsk { margin-top: .75rem; font-size: .9rem; color: var(--dim); }
 .tsk-pt.done { color: var(--ok); }
 .tsk-pt.current { color: var(--fg); font-weight: 600; }
+.tsk-done { color: var(--ok); font-weight: 700; letter-spacing: .06em; }
+/* The figures: a caption nobody reads twice, and a number the eye lands on. */
+.tsk-fig { display: inline-block; padding: 0 .5rem; }
+.tsk-label { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.tsk-val { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* …and the absence of a number, which must never be mistaken for a small one. Same discipline as
+   `.box.unknown`: dimmer than the dimmest measurement on the ribbon, so an em dash reads as "we
+   were not told" and never as "nearly nothing" (POT-007). */
+.tsk-val.tsk-unknown { color: var(--dim); font-weight: 400; opacity: .7; }
 
 /* ---- ESP-003: the two verdicts never share a colour. ---- */
 .airspace { margin-top: .75rem; font-size: .9rem; }
@@ -246,6 +283,36 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
 .xsection .asp-label { fill: var(--bad); font: 9px system-ui, sans-serif; }
 .xsection .glider { fill: var(--fg); }
 .xsection .xs-unknown { fill: var(--warn); font: 10px system-ui, sans-serif; }
+
+/* ---- THE-001/002: the circling assistant's rose. The wedge FILLS come from the kernel's own
+   lift palette (soaring-core/liftviz), inline on each path — the lift map, the potential fields
+   and this rose must all mean the same thing by the same orange, so this file never overrides
+   a `fill` on `.rose-lift`. It styles the frame, and it styles the HOLE.
+
+   The hole is the whole point. An unsampled sector and a dead-air sector are two different facts
+   about the sky, and at sixty degrees of bank the pilot reads a SHAPE — so a bin nobody has flown
+   through is drawn hatched and uncoloured, visibly a gap in the evidence, and the lift ramp never
+   touches it. A quarter of the circle painted in the colour of zero lift would be advice
+   ("nothing over there") invented out of a measurement nobody took (POT-007). ---- */
+.rose-frame { margin-top: 1rem; }
+.rose { display: inline-block; padding: .5rem .75rem; background: #10141a; border: 1px solid #2a313c; border-radius: .5rem; }
+.rose-head { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.rose-advice { font-size: .85rem; font-variant-numeric: tabular-nums; }
+/* "Not enough of the circle sampled" is not advice, it is the absence of it — so it wears the
+   same grey as every other unknown here, and never the plain voice of a finding like "even lift". */
+.rose-unsampled { color: var(--dim); }
+/* The refusal, in the app's one voice for "no measurement": grey, quiet, and no picture at all.
+   An empty ring drawn anyway would read as a circle flown and found empty. */
+.rose-none { color: var(--dim); font-size: .85rem; }
+.rose-svg { display: block; }
+.rose-ring { stroke: #2a313c; stroke-width: 1; }
+.rose-n { fill: var(--dim); font: 10px system-ui, sans-serif; }
+.rose-wedge { stroke: #10141a; stroke-width: 1; }
+.rose-empty { stroke: #3a4350; }
+.rose-hatch-line { stroke: #3a4350; stroke-width: 1; }
+/* THE-002's arrow, and it is only ever drawn when core named a sector. Bright, because it is the
+   one thing on the rose the pilot is meant to ACT on. */
+.rose-arrow { fill: var(--fg); stroke: var(--bg); stroke-width: 1; }
 
 /* ---- ANA-001: the barograph, with the kernel's climbs shaded under it ---- */
 .barograph { width: 100%; background: #10141a; border: 1px solid #2a313c; border-radius: .5rem; }

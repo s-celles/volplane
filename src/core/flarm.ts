@@ -14,7 +14,8 @@ import { isValid } from './nmea';
 export const SEE_AND_AVOID =
   'FLARM sees only other FLARMs — traffic display does not replace looking out';
 
-/** 0 none · 1 info (~19–25 s) · 2 important (~14–18 s) · 3 urgent (≤ 13 s). FLARM's own scale. */
+/** 0 none · 1 low (13–18 s) · 2 important (9–12 s) · 3 urgent (0–8 s). FLARM's own scale, and
+ *  every level from 1 up is a COLLISION ALARM in the Dataport spec — there is no "info" tier. */
 export type AlarmLevel = 0 | 1 | 2 | 3;
 
 export interface FlarmStatus {
@@ -26,6 +27,12 @@ export interface FlarmStatus {
   /** Metres above (+) / below (−) us, and metres away, of the loudest threat. */
   relVertical: number | null;
   relDistance: number | null;
+  /** Seconds-of-day this judgement was heard (the caller supplies the clock, exactly as Traffic
+   *  does). It exists so the status can be AGED: without it, the last PFLAU stands forever, and a
+   *  FLARM that falls silent mid-alarm — cable out, a source that sends position but no FLARM,
+   *  a replay followed by a Condor stream — leaves the banner lit and the warble sounding about
+   *  traffic that passed minutes ago, with no fix left that could ever retract it. */
+  at: number;
 }
 
 export interface Traffic {
@@ -51,8 +58,10 @@ const num = (s: string | undefined): number | null => {
 const level = (v: number | null): AlarmLevel =>
   (v === 1 || v === 2 || v === 3 ? v : 0);
 
-/** $PFLAU: the instrument's summary. Null on a malformed line, per ACQ-005. */
-export function parsePflau(line: string): FlarmStatus | null {
+/** $PFLAU: the instrument's summary. Null on a malformed line, per ACQ-005. `at` is the caller's
+ *  clock (seconds of day), as for PFLAA — the sentence carries no time of its own, and a
+ *  judgement that cannot be timed cannot be withdrawn. */
+export function parsePflau(line: string, at: number): FlarmStatus | null {
   if (!isValid(line)) return null;
   const f = line.slice(1, line.lastIndexOf('*')).split(',');
   if (f[0] !== 'PFLAU') return null;
@@ -64,6 +73,7 @@ export function parsePflau(line: string): FlarmStatus | null {
     bearing: num(f[6]),
     relVertical: num(f[8]),
     relDistance: num(f[9]),
+    at,
   };
 }
 
@@ -91,6 +101,20 @@ export function parsePflaa(line: string, at: number): Traffic | null {
  *  second; five silent seconds means gone (out of range, landed, or shadowed) — and a stale
  *  glider painted as current is a pilot looking at the wrong sky. */
 export const TRAFFIC_TTL_S = 5;
+
+/** The instrument's own JUDGEMENT ages on exactly the same law as the picture it judges, and for
+ *  a harder reason: an alarm is a claim about the next few seconds, so the moment the FLARM stops
+ *  speaking there is no evidence for it. Read the status through here — never straight off the
+ *  last-seen object — and a FLARM that goes quiet mid-alarm falls silent with its own banner
+ *  instead of warbling, unretractably, for the rest of the flight over an empty traffic list.
+ *
+ *  A clock that has gone BACKWARDS (a new replay, a day rollover) is a different flight, and last
+ *  flight's threat is not this flight's: it ages out too. */
+export function freshStatus(f: FlarmStatus | null, now: number): FlarmStatus | null {
+  if (!f) return null;
+  const dt = now - f.at;
+  return dt < 0 || dt > TRAFFIC_TTL_S ? null : f;
+}
 
 export interface TrafficStore {
   add(t: Traffic): void;

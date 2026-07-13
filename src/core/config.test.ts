@@ -7,7 +7,7 @@
 // silently mute every alert becomes null (all monitored), never an empty list.
 import { test, expect } from 'bun:test';
 import { DEFAULT_POLAR } from 'soaring-core/polar';
-import { DEFAULT_SETTINGS, normalizeSettings, activePolar } from './config';
+import { DEFAULT_SETTINGS, normalizeSettings, activePolar, fieldNumber } from './config';
 
 // One CSV line in the .plr dialect parsePlr accepts: mass, ballast, then three
 // (speed, sink) points and the wing area, with a comment line to prove those survive.
@@ -92,4 +92,33 @@ test('a class list that is not an array of strings watches everything, not a fra
 test('the old one-field record gains the new fields as null', () => {
   expect(normalizeSettings({ cacheBudgetMB: 300 }))
     .toEqual({ cacheBudgetMB: 300, polar: null, monitoredClasses: null });
+});
+
+// ---- the fields the pilot TYPES into (POT-007, TER-008) ----
+// The trap this function exists for: `Number('') === 0`, and 0 is finite. The obvious guard —
+// "finite? take it: else the default" — therefore lets an EMPTY box through as ZERO, which is the
+// one value it was written to keep out. An empty box is the state every field passes through the
+// instant the pilot selects it and hits backspace to retype.
+
+test('an EMPTY field is the default, not a zero — this is the whole point of the function', () => {
+  expect(fieldNumber('', 60)).toBe(60);
+  expect(fieldNumber('   ', 200)).toBe(200);
+  // A horizon of 0 s disabled the terrain alarm outright, silently, for the rest of the flight.
+  expect(fieldNumber('', 60, 1)).toBe(60);
+});
+
+test('garbage is the default too, and a real number is obeyed', () => {
+  expect(fieldNumber('abc', 60)).toBe(60);
+  expect(fieldNumber('1013.25', 900)).toBe(1013.25);
+  expect(fieldNumber('  45 ', 60)).toBe(45);
+  expect(fieldNumber('0', 1)).toBe(0);          // no minimum given: a typed 0 is a choice (MC 0)
+});
+
+test('below `min` is a value the pilot cannot have meant, so it is the default', () => {
+  // A horizon of 0 s is not a short horizon, it is no alarm; a QNH of 0 hPa is no altimeter
+  // setting. Where zero is not a value, it does not become one by being typed.
+  expect(fieldNumber('0', 60, 1)).toBe(60);
+  expect(fieldNumber('-30', 60, 1)).toBe(60);
+  expect(fieldNumber('0', 1013.25, 1)).toBe(1013.25);
+  expect(fieldNumber('30', 60, 1)).toBe(30);    // above the minimum: obeyed
 });

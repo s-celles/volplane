@@ -100,9 +100,15 @@ export function reachOnBearing(
     if (g == null) return end(d - stepM, 'unknown');     // the DEM stops; so do we, honestly
     if (h < g + safetyM) {
       // The slope met the ground. WHICH ground decides the verdict, and the difference is
-      // TER-005: ground at or above the glider's own altitude is a RIDGE in the way; ground
-      // far below is simply where the glide ran out.
-      const blocked = g + safetyM > alt - safetyM;
+      // TER-005: ground standing at (or within the clearance of) the glider's OWN altitude is a
+      // RIDGE in the way — it could not be crossed even in level flight, so everything behind it
+      // is unreachable. Ground below the glider is simply where the glide ran out.
+      //
+      // The comparison is against `alt`, not against `alt - safetyM`. Subtracting the clearance
+      // here as well as on the left counts it twice, and the arithmetic then reads ANY ground
+      // less than 2 × safetyM under the glider as a ridge: with the reserve the pilot actually
+      // sets, dead-flat ground 200 m below him was reported as a mountain in his way.
+      const blocked = g + safetyM > alt;
       return end(d - stepM, blocked ? 'terrain' : 'glide');
     }
   }

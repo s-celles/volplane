@@ -17,8 +17,18 @@
 //
 // Browsers refuse sound before a gesture, and that refusal is not a bug to work around:
 // `openAudio()` is called from the pilot's own click. Until then there is no context at all.
+//
+// FLM-002 widened what this file plays, but not what it decides. It is fed a VOICE — a looped
+// sequence of tones (core/alarmtone.ts) — instead of a single tone, and it asks `voiceAt` which
+// tone is due at the audio clock's current instant. The vario and the STF director are one-step
+// voices and sound exactly as they always did. The alarms are two-step WARBLES, and the warble
+// is the whole point: a fast high beep is what a 5 m/s climb sounds like, so an alarm built out
+// of rate and pitch alone would be a compliment to the pilot's centring. Two alternating
+// pitches inside one continuous cry cannot be heard as any vario. Which voice wins is not this
+// file's business either — `chooseVoice` decides that, upstairs, where a test can reach it.
 
 import { type Tone } from '../core/vartone';
+import { type Voice, steady, voiceAt } from '../core/alarmtone';
 
 /** Master gain. Loud enough to hear over the airflow, quiet enough not to be the first thing
  *  a pilot mutes. */
@@ -31,6 +41,8 @@ const AHEAD_S = 0.13;
 export interface AudioOut {
   /** Feed the tone. Cheap and idempotent — call it every fix. */
   setTone(t: Tone): void;
+  /** Feed a voice — a looped sequence, which is what an alarm is. Null is silence. */
+  setVoice(v: Voice | null): void;
   stop(): void;
   readonly running: boolean;
 }
@@ -52,7 +64,7 @@ export function openAudio(): AudioOut | null {
   osc.start();
   void ctx.resume();                         // we are inside the gesture that unlocks it
 
-  let tone: Tone = { silent: true, hz: 0, pulsesPerS: 0, duty: 0 };
+  let voice: Voice | null = null;
   let nextBeep = ctx.currentTime;
   let running = true;
 
@@ -78,6 +90,9 @@ export function openAudio(): AudioOut | null {
   const timer = setInterval(() => {
     if (!running) return;
     const now = ctx.currentTime;
+    // The voice's own clock is the AUDIO clock, not the event loop's: the warble's steps land
+    // where the sound is, not where setInterval happened to fire.
+    const tone = voiceAt(voice, now * 1000);
     if (tone.silent) { hold(0); nextBeep = now; return; }
     // The pitch glides rather than jumps: setTargetAtTime over ~20 ms follows a strengthening
     // thermal without the stepped, robotic quality of an abrupt frequency write.
@@ -94,7 +109,10 @@ export function openAudio(): AudioOut | null {
   }, LOOK_MS);
 
   return {
-    setTone(t: Tone): void { if (running) tone = t; },
+    // A tone is just a voice with one step, so there is one code path and no chance of the two
+    // drifting apart. main.ts keeps calling setTone and keeps sounding identical.
+    setTone(t: Tone): void { if (running) voice = steady(t); },
+    setVoice(v: Voice | null): void { if (running) voice = v; },
     stop(): void {
       running = false;
       clearInterval(timer);

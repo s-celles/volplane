@@ -84,6 +84,28 @@ export function normalizeSettings(raw: unknown): Settings {
   };
 }
 
+/** A number the pilot typed into a field, or the default when he typed nothing usable.
+ *
+ *  It is here, in core, and it is tested, because the obvious one-liner is WRONG in exactly the
+ *  case that matters. `Number.isFinite(Number(v)) ? v : fallback` looks like it guards the field,
+ *  and it does guard the garbage — but `Number('') === 0`, and 0 is perfectly finite. So an
+ *  EMPTY box, which is what every field passes through the instant the pilot selects it and hits
+ *  backspace to retype, yields not the default but ZERO. That zero then goes wherever the field
+ *  goes: a terrain horizon of 0 s disabled the alarm outright, silently, for the rest of the
+ *  flight; a reserve of 0 m took the clearance out of the final glide; a QNH of 0 hPa is not an
+ *  altimeter setting at all. The guard missed the very case it existed for.
+ *
+ *  `min` is for the fields where the smallest meaningful value is not zero — a horizon, a QNH.
+ *  Below it we take the default, because a threshold the pilot cannot have meant is a threshold
+ *  he did not set. */
+export function fieldNumber(raw: string, fallback: number, min?: number): number {
+  const t = raw.trim();
+  if (t === '') return fallback;
+  const v = Number(t);
+  if (!Number.isFinite(v)) return fallback;
+  return min != null && v < min ? fallback : v;
+}
+
 /** The one spelling of "which polar flies", so main.ts and any future screen cannot hold two
  *  opinions. Never null: the normalizer vetted the stored text, and if a raced edit slips
  *  through anyway the default flies — a glide computer with no polar is not a state this app
