@@ -52,13 +52,15 @@ import { offerableLinks, missingLinks, type Platform } from '../core/links';
 import type { Driver } from '../core/nmea';
 import { tcpDevice, udpDevice, replaySource, closeLinks } from './tauri-source';
 import { terrainStore, Z } from './terrain';
-import { openStore, isPersistent } from './store';
+import { openStore, isPersistent, getJson, putJson } from './store';
 import { downloadPack, heldFor, loadWeather } from './provision';
 import {
   loadShelf, saveShelf, heldForShelf, tileInventory, enforceBudget,
   saveFlightFile, loadFlightFile, loadSettings, saveSettings,
 } from './packstore';
 import { shelfHtml, cacheHtml, BYTES_PER_MB } from './shelf-ui';
+import { repositoryHtml } from './repository-ui';
+import { parseCatalogue, versionOf, freshness, type CatalogueEntry, type Held as HeldFile } from '../core/catalogue';
 import { completenessHtml, offlineBadgeHtml, briefingHtml, emagramSvg } from './briefing-ui';
 import { paintLiftMap, mixerSvg, mixerHit, legendHtml, type Paint2D, type View } from './liftmap-ui';
 import { elevAtFromTiles, mPerLng, M_PER_LAT, distM, bearingDeg } from 'soaring-core/geo';
@@ -69,6 +71,7 @@ import { LIFT_COMPS } from 'soaring-core/lift/mix';
 import type { Wx, WxKnobs } from 'soaring-core/weather';
 import type { TrackPoint } from 'soaring-core/types';
 import peaksCsv from 'soaring-data/datasets/landmarks/peaks.csv' with { type: 'text' };
+import catalogueCsv from 'soaring-data/catalogue/catalogue.csv' with { type: 'text' };
 import coastlineGeo from 'soaring-data/datasets/landmarks/coastline.geojson' with { type: 'json' };
 import bordersGeo from 'soaring-data/datasets/landmarks/borders.geojson' with { type: 'json' };
 import lakesGeo from 'soaring-data/datasets/landmarks/lakes.geojson' with { type: 'json' };
@@ -894,6 +897,9 @@ bf.innerHTML = `
   <div id="bf-completeness"></div>
   <h2>pack shelf</h2>
   <div id="bf-shelf"></div>
+  <h2>Repository</h2>
+  <div id="bf-repo"></div>
+  <span id="bf-repo-status" class="progress"></span>
   <div class="cache-line">
     <label>cache budget <input id="bf-budget" size="5" value="200" inputmode="numeric" /> MB</label>
     <div id="bf-cache"></div>
@@ -936,6 +942,8 @@ const progressEl = q('#bf-progress');
 const netEl = q('#bf-net');
 const completenessEl = q('#bf-completeness');
 const shelfEl = q('#bf-shelf');
+const repoEl = q('#bf-repo');
+const repoStatusEl = q('#bf-repo-status');
 const cacheEl = q('#bf-cache');
 const budgetIn = q<HTMLInputElement>('#bf-budget');
 const briefingEl = q('#bf-briefing');
@@ -1116,6 +1124,76 @@ async function refreshShelf(): Promise<void> {
     cacheEl.innerHTML = '';
   }
 }
+
+// The catalogue is BUNDLED (soaring-data, Frictionless): the list of what exists is available with
+// the radio dead. Only the FILES need a network, which is the honest split — a pilot offline can
+// still see what he is missing.
+const catalogue: CatalogueEntry[] = parseCatalogue(catalogueCsv);
+
+/** What we hold, per catalogue entry. Persisted with the flight files (OFF-002) — the raw bytes go
+ *  through the SAME store, so a downloaded airspace survives a restart exactly as a hand-picked one
+ *  does, and the two are indistinguishable downstream. */
+let repoHeld: Record<string, HeldFile> = {};
+
+const REPO_HELD_KEY = 'repo/held';
+
+function renderRepo(): void {
+  repoEl.innerHTML = repositoryHtml(
+    catalogue,
+    new Map(Object.entries(repoHeld)),
+    e => freshness(repoHeld[e.id] ?? null, Date.now()),
+    navigator.onLine,
+  );
+}
+
+/** Download one entry, adopt it, and remember how old the file said it was. The fetch is plain:
+ *  these sources serve CORS, and a Rust round-trip would buy nothing but a layer to debug. */
+async function fetchEntry(e: CatalogueEntry): Promise<void> {
+  repoStatusEl.textContent = `fetching ${e.name}…`;
+  try {
+    const r = await boundFetch(e.uri);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const text = await r.text();
+    if (!text.trim()) throw new Error('the server answered with an empty file');
+
+    // The file's OWN date, when it states one — better than anything the catalogue could carry,
+    // because it describes THIS copy rather than what upstream published at some point.
+    repoHeld[e.id] = {
+      entryId: e.id, fetchedAt: Date.now(), fileDate: versionOf(text), bytes: text.length,
+    };
+    await saveFlightFile(kv, 'airspace', { name: `${e.id} (${e.name})`, text });
+    await putJson(kv, REPO_HELD_KEY, repoHeld);
+    const r2 = adoptAirspace(text);
+    (app.querySelector('#oa-label') as HTMLElement).textContent = `${r2.label} (from the repository)`;
+    repoStatusEl.textContent = r2.adopted
+      ? `${e.name}: ${r2.label}`
+      : `${e.name}: ${r2.label}`;
+    renderRepo();
+    render(state, link);
+  } catch (err) {
+    // A failed download changes NOTHING: the airspace already loaded stays loaded, and the pilot
+    // is told which file he is still flying with rather than being left to wonder.
+    repoStatusEl.textContent =
+      `${e.name}: download failed (${err instanceof Error ? err.message : String(err)}) — the airspace you already had is unchanged`;
+  }
+}
+
+repoEl.onclick = e => {
+  const btn = (e.target as HTMLElement).closest('button[data-act]') as HTMLButtonElement | null;
+  const id = btn?.dataset.id;
+  if (!btn || !id) return;
+  const entry = catalogue.find(c => c.id === id);
+  if (!entry) return;
+  if (btn.dataset.act === 'get') void fetchEntry(entry);
+  else if (btn.dataset.act === 'use') void (async () => {
+    // 'use' re-adopts what is already on disk — no network, so it works in the air.
+    const f = await loadFlightFile(kv, 'airspace');
+    if (!f) { repoStatusEl.textContent = 'nothing stored for that entry'; return; }
+    const r = adoptAirspace(f.text);
+    repoStatusEl.textContent = `${entry.name}: ${r.label}`;
+    render(state, link);
+  })();
+};
 
 /** The full refresh: form → spec → holdings → completeness → weather → day. Runs on screen
  *  entry, on any spec-shaping input, on the sandbox controls, and after a provisioning run —
@@ -1429,6 +1507,7 @@ function showTab(which: 'fly' | 'briefing' | 'analysis'): void {
     // disk as it IS, not as it was when something last rendered.
     void refreshBriefing();
     void refreshShelf();
+    renderRepo();                 // the ages move with the clock, so they are re-rendered on entry
   }
 }
 tabFly.onclick = () => showTab('fly');

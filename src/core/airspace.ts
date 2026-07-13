@@ -41,7 +41,13 @@ function altOf(s: string): number | null | undefined {
   return m[2] === 'M' ? v : v * FT;                    // OpenAir's default unit is feet
 }
 
-/** "DD:MM:SS N" or "DD:MM.mmm N" → decimal degrees. */
+/** The separator between a latitude and the longitude that follows it is OPTIONAL, and that is
+ *  not laxity — it is a real national file. France writes `DP 45:39:57 N00:47:20 W`, gluing the
+ *  hemisphere letter to the longitude, and a parser demanding a space there refuses the volume
+ *  whole. The one it refused was WHISKEY 1 VV, a RESTRICTED area: an airspace the pilot would
+ *  simply not have seen. A stricter regex is not a safer one.
+ *
+ *  "DD:MM:SS N" or "DD:MM.mmm N" → decimal degrees. */
 function coordOf(s: string): number | undefined {
   const m = /^(\d+):(\d+)(?::(\d+(?:\.\d+)?))?\s*([NSEW])$/.exec(s.trim());
   if (!m) return undefined;
@@ -115,7 +121,7 @@ export function parseOpenAir(text: string): { spaces: Airspace[]; refused: numbe
       case 'AL': cur.floor = altOf(arg); break;
       case 'AH': cur.ceiling = altOf(arg); break;
       case 'DP': {
-        const m = /^(.+?[NS])\s+(.+?[EW])$/.exec(arg);
+        const m = /^(.+?[NS])\s*(.+?[EW])$/.exec(arg);
         const lat = m && coordOf(m[1]), lon = m && coordOf(m[2]);
         if (lat != null && lon != null) (cur.points ??= []).push([lon, lat]);
         else cur.floor = undefined;                     // poison the volume: refuse it whole
@@ -123,7 +129,7 @@ export function parseOpenAir(text: string): { spaces: Airspace[]; refused: numbe
       }
       case 'V': {
         // One assignment per V line, and X= / D= may arrive in either order within a block.
-        const x = /^X\s*=\s*(.+?[NS])\s+(.+?[EW])$/.exec(arg);
+        const x = /^X\s*=\s*(.+?[NS])\s*(.+?[EW])$/.exec(arg);
         if (x) {
           const lat = coordOf(x[1]), lon = coordOf(x[2]);
           centre = lat != null && lon != null ? { lon, lat } : null;
@@ -149,7 +155,7 @@ export function parseOpenAir(text: string): { spaces: Airspace[]; refused: numbe
       case 'DB': {
         const halves = arg.split(',');
         const ends = halves.map((h) => {
-          const m = /^(.+?[NS])\s+(.+?[EW])$/.exec(h.trim());
+          const m = /^(.+?[NS])\s*(.+?[EW])$/.exec(h.trim());
           const lat = m && coordOf(m[1]), lon = m && coordOf(m[2]);
           return lat != null && lon != null ? { lon, lat } : null;
         });

@@ -160,6 +160,43 @@ DB 45:05:00 N 006:00:00 E, 45:00:00 N 006:07:00 E
   expect(poly[poly.length - 1][1]).toBe(45);
 });
 
+test('the hemisphere letter may be GLUED to the longitude — a real national file writes it so', () => {
+  // Found on the actual French airspace file, and it is not a curiosity: it writes
+  //     DP 45:39:57 N00:47:20 W
+  // with no space after the N. A parser demanding one refused the volume WHOLE — and the volume
+  // it refused was WHISKEY 1 VV, a RESTRICTED area. A stricter regex is not a safer one: it is an
+  // airspace the pilot does not see.
+  const { spaces, refused } = parseOpenAir(`
+AC UNC
+AY R
+AN WHISKEY 1 VV
+AH 4000FT AMSL
+AL 3000FT AMSL
+DP 45:39:57 N00:47:20 W
+DP 45:39:57 N00:33:00 W
+DP 45:38:52 N00:34:01 W
+`);
+  expect(refused).toBe(0);
+  expect(spaces.length).toBe(1);
+  expect(spaces[0].name).toBe('WHISKEY 1 VV');
+  expect(spaces[0].polygon!.length).toBe(3);
+  // And the coordinates really were read, not merely accepted: 00:47:20 W is a NEGATIVE longitude.
+  expect(spaces[0].polygon![0][0]).toBeCloseTo(-(47 / 60 + 20 / 3600), 6);
+  expect(spaces[0].polygon![0][1]).toBeCloseTo(45 + 39 / 60 + 57 / 3600, 6);
+  // The spaced spelling still parses identically — the separator is optional, not forbidden.
+  const spaced = parseOpenAir(`
+AC UNC
+AN SPACED
+AH 4000FT AMSL
+AL 3000FT AMSL
+DP 45:39:57 N 000:47:20 W
+DP 45:39:57 N 000:33:00 W
+DP 45:38:52 N 000:34:01 W
+`);
+  expect(spaced.refused).toBe(0);
+  expect(spaced.spaces[0].polygon![0]).toEqual(spaces[0].polygon![0]);
+});
+
 test('a DA with no centre refuses the volume whole; the next volume still loads', () => {
   const { spaces, refused } = parseOpenAir(`
 AC D
