@@ -1,66 +1,32 @@
-// The one thing an audio vario must never do: make a sound that means something it does not
-// mean. A dead sensor is silent, neutral air is silent, and climb and sink cannot be mistaken
-// for one another with your eyes outside the cockpit — which is the whole point of the sound.
+// The LAW is the kernel's, and the kernel tests it (soaring-core/src/varioaudio.test.ts).
+// What this file pins is the thing a re-export can silently break: that VOLPLANE really is
+// speaking the kernel's dialect, and has not quietly grown a second one.
+//
+// It is a small test with a real job. The first version of this app had its OWN sound law —
+// linear pitch, a sine wave, a sink threshold so wide that gentle sink was mute — and it
+// sounded nothing like the vario in ogn-3d-viewer, its sibling. That divergence is exactly
+// what C4 forbids and exactly what a re-export can reintroduce by accident.
 import { test, expect } from 'bun:test';
-import { varioTone, stfTone, SILENT } from './vartone';
+import { varioTone, stfTone, toneHz, F0, DEADBAND_MS } from './vartone';
+import * as kernel from 'soaring-core/varioaudio';
 
-test('an unknown vario is SILENT — there is no honest sound for "I do not know"', () => {
-  expect(varioTone(null)).toEqual(SILENT);
-  expect(varioTone(undefined)).toEqual(SILENT);
-  expect(varioTone(NaN)).toEqual(SILENT);
-});
-
-test('neutral air says nothing: the deadband holds', () => {
-  expect(varioTone(0).silent).toBe(true);
-  expect(varioTone(0.2).silent).toBe(true);
-  expect(varioTone(-1).silent).toBe(true);            // between the deadband and the sink alarm
-});
-
-test('climb rises in pitch and beats faster; sink growls BELOW the base, continuously', () => {
-  const weak = varioTone(1), strong = varioTone(4);
-  expect(weak.silent).toBe(false);
-  expect(strong.hz).toBeGreaterThan(weak.hz);
-  expect(strong.pulsesPerS).toBeGreaterThan(weak.pulsesPerS);
-  expect(weak.pulsesPerS).toBeGreaterThan(0);         // climb BEEPS
-
-  const sink = varioTone(-3);
-  expect(sink.silent).toBe(false);
-  expect(sink.pulsesPerS).toBe(0);                    // sink GROWLS — continuous, not a beep
-  expect(sink.hz).toBeLessThan(weak.hz);              // and below the climb's voice, always
-});
-
-test('climb and sink can never be confused, at any strength', () => {
-  for (const up of [0.5, 1, 2, 5, 9]) {
-    for (const down of [-2.5, -4, -8, -12]) {
-      const u = varioTone(up), dn = varioTone(down);
-      if (u.silent || dn.silent) continue;
-      expect(u.hz).toBeGreaterThan(dn.hz);            // up is always higher than down…
-      expect(u.pulsesPerS).toBeGreaterThan(0);        // …and up always beeps…
-      expect(dn.pulsesPerS).toBe(0);                  // …while down never does
-    }
+test('the app sounds the KERNEL law, not a local copy of it', () => {
+  for (const vz of [null, -9, -2, -0.5, -0.1, 0, 0.1, 0.5, 2, 5, 12, NaN]) {
+    expect(varioTone(vz)).toEqual(kernel.varioTone(vz));
   }
+  for (const d of [null, -12, -3, -1, 0, 1, 3, 12]) {
+    expect(stfTone(d)).toEqual(kernel.stfTone(d));
+  }
+  expect(F0).toBe(kernel.F0);
+  expect(DEADBAND_MS).toBe(kernel.DEADBAND_MS);
 });
 
-test('the tone saturates instead of running away', () => {
-  const strong = varioTone(5), absurd = varioTone(50);
-  expect(absurd.hz).toBeCloseTo(strong.hz, 6);        // a 50 m/s "climb" is a broken sensor
-  expect(absurd.pulsesPerS).toBeCloseTo(strong.pulsesPerS, 6);
-  expect(varioTone(-40).hz).toBeGreaterThanOrEqual(120);   // and the growl stays audible
-});
-
-test('VAR-005: too slow chirps high and urgent, too fast drones low and lazy', () => {
-  const slow = stfTone(-8), fast = stfTone(8);
-  expect(slow.silent).toBe(false);
-  expect(fast.silent).toBe(false);
-  expect(slow.hz).toBeGreaterThan(fast.hz);           // the two errors sound OPPOSITE…
-  expect(slow.pulsesPerS).toBeGreaterThan(fast.pulsesPerS);
-  expect(slow.duty).toBeLessThan(fast.duty);          // …chirps against a drone
-});
-
-test('the speed director shuts up inside its tolerance — one that never does gets muted', () => {
-  expect(stfTone(0).silent).toBe(true);
-  expect(stfTone(1.9).silent).toBe(true);
-  expect(stfTone(-1.9).silent).toBe(true);
-  expect(stfTone(3).silent).toBe(false);
-  expect(stfTone(null)).toEqual(SILENT);
+test('the pitch really is exponential, and gentle sink really does speak', () => {
+  // The two regressions that made the first attempt sound wrong. If either comes back, it
+  // comes back HERE, not in a pilot's ear.
+  expect(toneHz(0)).toBeCloseTo(F0, 6);
+  expect(toneHz(4) - toneHz(3)).toBeGreaterThan((toneHz(1) - toneHz(0)) * 1.5);
+  expect(varioTone(-0.5).silent).toBe(false);
+  expect(varioTone(-0.5).pulsesPerS).toBe(0);     // sink growls, continuously
+  expect(varioTone(2).pulsesPerS).toBeGreaterThan(0);   // climb beeps
 });
