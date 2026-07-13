@@ -9,7 +9,7 @@
 // a log. And OFF-008 draws the line that shapes everything below: 'flight' data is owed,
 // 'enrichment' data is offered. Only the first kind can make a pack not-ready.
 
-import { lonLatToTile, type BBox } from 'soaring-core/geo';
+import { lonLatToTile, mPerLng, M_PER_LAT, type BBox } from 'soaring-core/geo';
 
 // ---- kinds and their class ----
 
@@ -42,6 +42,32 @@ export interface PackSpec {
   name: string;
   area: BBox;
   day: string;
+  /** The ask as the pilot TYPED it, when known. The area is derived from these; the originals
+   *  ride along because the area alone cannot give them back — a radius derived from the area
+   *  and rounded for a form field, re-provisioned, is a DIFFERENT area silently replacing the
+   *  shelved one under the same id (a confirmed finding). Optional, because shelves persisted
+   *  before these fields existed still normalize; 'open' falls back to deriving for them. */
+  centre?: { lon: number; lat: number };
+  radiusKm?: number;
+}
+
+/** Build the spec for "radiusKm around (lon, lat) on day" — the ONE spelling of that fold,
+ *  shared by the briefing form and by the shelf's 'open', so an opened pack and a typed one
+ *  are the same value and re-provisioning an opened pack rebuilds the IDENTICAL spec, byte
+ *  for byte. The id folds day and centre at 2 decimals (≈ 1 km — packs a village apart share
+ *  their cache); the area is the radius turned into degrees at this latitude; the typed ask
+ *  is carried verbatim (see PackSpec.centre). */
+export function specFor(lon: number, lat: number, radiusKm: number, day: string): PackSpec {
+  const dLat = radiusKm * 1000 / M_PER_LAT;
+  const dLon = radiusKm * 1000 / mPerLng(lat);
+  return {
+    id: `${day}:${lon.toFixed(2)}:${lat.toFixed(2)}`,
+    name: `${radiusKm} km around ${lat.toFixed(2)}, ${lon.toFixed(2)} on ${day}`,
+    area: { west: lon - dLon, east: lon + dLon, south: lat - dLat, north: lat + dLat },
+    day,
+    centre: { lon, lat },
+    radiusKm,
+  };
 }
 
 // ---- tiles: the unit terrain is counted in ----

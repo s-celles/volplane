@@ -148,3 +148,30 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
 .legend-note { color: var(--warn); margin-left: .5rem; font-size: .75rem; }
 .legend-note.inactive { color: var(--dim); }
 .progress, .cal { font-size: .85rem; color: var(--dim); }
+
+/* ---- OFF-010: the pack shelf. One row per promise; the pin is the pilot's own mark
+   (OFF-007), so a pinned row is visibly set apart, not merely sorted first. ---- */
+.shelf { display: flex; flex-direction: column; gap: .4rem; margin-top: .25rem; }
+.shelf-empty { color: var(--dim); font-size: .85rem; }
+.shelf-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; background: #151920; border-radius: .5rem; padding: .5rem .75rem; font-size: .85rem; }
+.shelf-row.pinned { outline: 1px solid #3a4350; }
+.shelf-row .name { font-weight: 600; }
+.shelf-row .day { color: var(--dim); font-variant-numeric: tabular-nums; }
+.shelf-row button { padding: .25rem .5rem; font-size: .8rem; }
+/* The readiness chip: the same three-way honesty as the completeness header — a pack nobody
+   measured is a dash, never a green light the measurement did not earn (POT-007). */
+.badge.ready, .badge.not-ready, .badge.unknown { display: inline-block; padding: .1rem .35rem; border-radius: .25rem; font-size: .6rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.badge.ready { background: rgba(76, 175, 120, .15); color: var(--ok); }
+.badge.not-ready { background: rgba(224, 82, 82, .15); color: var(--bad); }
+.badge.unknown { background: #1c222b; color: var(--dim); }
+/* OFF-009: the offer is a proposal riding its row — a named reason and one button. It draws
+   the eye like a warning because it IS one (the snapshot rotted), but nothing runs by itself. */
+.shelf-row .offer { flex-basis: 100%; display: flex; gap: .5rem; align-items: center; color: var(--warn); font-size: .8rem; }
+/* ---- OFF-006: the ceiling and what the last enforcement did (or honestly could not) ---- */
+.cache-line { margin-top: .75rem; display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap; font-size: .85rem; color: var(--dim); }
+.cache-line input { padding: .25rem .4rem; font-size: .85rem; }
+.cache { display: flex; gap: 1rem; flex-wrap: wrap; }
+.cache .cache-usage { font-variant-numeric: tabular-nums; }
+.cache .cache-usage.unknown { color: var(--dim); }
+.cache .evicted { color: var(--dim); }
+.cache .over-budget { color: var(--warn); }

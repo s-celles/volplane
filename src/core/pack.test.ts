@@ -11,7 +11,7 @@
 import { test, expect } from 'bun:test';
 import { tileBBox, type BBox } from 'soaring-core/geo';
 import {
-  PACK_KINDS, packClass, tileKey, tilesForArea, completeness,
+  PACK_KINDS, packClass, specFor, tileKey, tilesForArea, completeness,
   WEATHER_MAX_AGE_MS, type PackSpec, type Held, type TileRef,
 } from './pack';
 
@@ -167,6 +167,35 @@ test('empty, inverted and antimeridian areas yield no tiles and a missing terrai
     expect(terrain.status).toBe('missing');
     expect(terrain.totalCount).toBe(0);
     expect(c.ready).toBe(false);              // a pack over no area carries no flight
+  }
+});
+
+// ---- specFor: the ask folds one way, and folds back losslessly ----
+
+test('specFor folds day and centre into the id at 2 decimals, and carries the ask verbatim', () => {
+  const s = specFor(6.123, 45.678, 12.75, '2026-07-12');
+  expect(s.id).toBe('2026-07-12:6.12:45.68');
+  expect(s.day).toBe('2026-07-12');
+  expect(s.centre).toEqual({ lon: 6.123, lat: 45.678 });
+  expect(s.radiusKm).toBe(12.75);
+  // The area really is the radius at this latitude — centred, not offset.
+  expect((s.area.west + s.area.east) / 2).toBeCloseTo(6.123, 10);
+  expect((s.area.south + s.area.north) / 2).toBeCloseTo(45.678, 10);
+});
+
+test('an opened pack re-provisions to the IDENTICAL spec (the lossless round-trip)', () => {
+  // 'open' copies the carried ask into form fields (String) and the form reads them back
+  // (Number). A double survives String→Number exactly, so the rebuilt spec must equal the
+  // shelved one byte for byte — the confirmed finding was a 0.1 km-rounded radius rebuilding
+  // a DIFFERENT area under the same id, replacing the shelved spec silently. Awkward radii
+  // on purpose: none is a 0.1 km multiple.
+  for (const r of [12.75, 12.66, 7.03, 19.99]) {
+    const s = specFor(6.123, 45.678, r, '2026-07-12');
+    const s2 = specFor(
+      Number(String(s.centre!.lon)), Number(String(s.centre!.lat)),
+      Number(String(s.radiusKm)), s.day,
+    );
+    expect(s2).toEqual(s);
   }
 });
 

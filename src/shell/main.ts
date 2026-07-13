@@ -25,7 +25,10 @@ import { parseOpenAir, incursions, type Airspace } from '../core/airspace';
 import { simpleTask, freshProgress, advance, type Task, type TaskProgress, type Waypoint } from '../core/task';
 import { paintMap as paintMovingMap, type MapPaint2D } from './map-ui';
 import type { View as MapView } from './liftmap-ui';
-import { completeness, type PackSpec, type Held } from '../core/pack';
+import { completeness, specFor, type Completeness, type PackSpec, type Held } from '../core/pack';
+import { normalizeSettings, type Settings } from '../core/config';
+import { upsertPack, touchPack, setPinned, removePack, sortedShelf, updateOffers, type Shelf } from '../core/shelf';
+import type { EvictionPlan } from '../core/cachebudget';
 import { briefingAt, sandboxWx, type Provenance } from '../core/briefing';
 import { computeLiftMap, calibrateFromTrack, type LiftMap } from '../core/liftmap';
 import { offerableLinks, missingLinks, type Platform } from '../core/links';
@@ -34,6 +37,11 @@ import { tcpDevice, udpDevice, replaySource, closeLinks } from './tauri-source';
 import { terrainStore, Z } from './terrain';
 import { openStore, isPersistent } from './store';
 import { downloadPack, heldFor, loadWeather } from './provision';
+import {
+  loadShelf, saveShelf, heldForShelf, tileInventory, enforceBudget,
+  saveFlightFile, loadFlightFile, loadSettings, saveSettings,
+} from './packstore';
+import { shelfHtml, cacheHtml, BYTES_PER_MB } from './shelf-ui';
 import { completenessHtml, offlineBadgeHtml, briefingHtml, emagramSvg } from './briefing-ui';
 import { paintLiftMap, mixerSvg, mixerHit, legendHtml, type Paint2D, type View } from './liftmap-ui';
 import { elevAtFromTiles, mPerLng, M_PER_LAT, distM, bearingDeg } from 'soaring-core/geo';
@@ -47,6 +55,13 @@ import type { Wx, WxKnobs } from 'soaring-core/weather';
 // store's very first read may already be a disk hit. openStore never throws — worst case the
 // KV is memory-only and the offline badge says so out loud (OFF-005).
 const kv = await openStore('volplane');
+
+// The shelf as the last session left it (OFF-002): the packs the pilot promised himself,
+// read back before any screen renders. Settings do NOT come back yet — the core config
+// module (Settings/normalizeSettings) has not landed, and prefilling the forms from a shape
+// this file invented would be a fake fill; packstore.ts carries the same gap, marked out
+// loud. Until it lands, every input below simply keeps its built-in default.
+let shelf: Shelf = await loadShelf(kv);
 
 // The DEM, read disk-first and network-second (OFF-004): over ground this machine has visited
 // — or been provisioned for — the radio is never consulted, so the Fly screen survives a
@@ -344,41 +359,63 @@ app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => render(state, li
   URL.revokeObjectURL(a.href);
   (app.querySelector('#oa-label') as HTMLElement).textContent = `saved ${n} fixes`;
 };
-(app.querySelector('#tsk') as HTMLInputElement).onchange = async e => {
-  const f = (e.target as HTMLInputElement).files?.[0];
-  if (!f) return;
-  // One waypoint per line: "name,lon,lat". Lines that fail to parse are counted, not
-  // guessed at — same refusal discipline as OpenAir.
+/** TSK: adopt a task from CSV text — one waypoint per line, "name,lon,lat". Lines that fail
+ *  to parse are counted, not guessed at — same refusal discipline as OpenAir. Returns the
+ *  label to show, or null when the text does not amount to a task. This is the ONE parse
+ *  path: the file input and the restart restore (OFF-002) both come through here, so a
+ *  restored task cannot behave differently from one just chosen. */
+function adoptTask(text: string): string | null {
   const wps: Waypoint[] = [];
   let refused = 0;
-  for (const line of (await f.text()).split(/\r?\n/)) {
+  for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     const [name, lonS, latS] = line.split(',').map(x => x.trim());
     const lon = Number(lonS), lat = Number(latS);
     if (name && Number.isFinite(lon) && Number.isFinite(lat)) wps.push({ name, lon, lat });
     else refused++;
   }
-  if (wps.length < 2) {
-    (app.querySelector('#tsk-label') as HTMLElement).textContent = 'a task needs at least a start and a finish';
-    return;
-  }
+  if (wps.length < 2) return null;
   task = simpleTask(wps, 'fai-2024');
   taskProgress = freshProgress(task);
+  return `${wps.length} points, ${task.rules}${refused ? `, ${refused} lines refused` : ''}`;
+}
+(app.querySelector('#tsk') as HTMLInputElement).onchange = async e => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  const text = await f.text();
+  const label = adoptTask(text);
   (app.querySelector('#tsk-label') as HTMLElement).textContent =
-    `${wps.length} points, ${task.rules}${refused ? `, ${refused} lines refused` : ''}`;
+    label ?? 'a task needs at least a start and a finish';
+  // OFF-002: the task survives the restart — saved as the RAW text, and only once adopted:
+  // a file refused above is not a task, and must not come back next launch as one.
+  if (label) void saveFlightFile(kv, 'task', { name: f.name, text });
   render(state, link);
 };
 (app.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => { mapWidthM = Math.max(2000, mapWidthM / 1.5); render(state, link); };
 (app.querySelector('#zoom-out') as HTMLButtonElement).onclick = () => { mapWidthM = Math.min(200_000, mapWidthM * 1.5); render(state, link); };
+/** ESP: adopt an OpenAir file's text. ESP-001's display starts as words; the map (CAR) draws
+ *  them. Refusals are COUNTED out loud — a volume silently dropped is a TMA the pilot thinks
+ *  is loaded. One parse path for the file input and the restore (OFF-002), like adoptTask.
+ *
+ *  A file that parses to ZERO volumes is refused WHOLE: memory keeps the working airspace
+ *  and the disk keeps the file that produced it, so this session and the next launch agree.
+ *  The half-way state — memory wiped, disk kept — flew one session with no airspace and
+ *  silently re-armed the superseded file at every later launch (a confirmed finding, twice). */
+function adoptAirspace(text: string): { adopted: boolean; label: string } {
+  const { spaces: loaded, refused } = parseOpenAir(text);
+  if (loaded.length === 0) {
+    return { adopted: false, label: `0 volumes parsed (${refused} refused) — file rejected, keeping the current airspace` };
+  }
+  spaces = loaded;
+  return { adopted: true, label: `${loaded.length} volumes loaded${refused ? `, ${refused} refused` : ''}` };
+}
 (app.querySelector('#oa') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
-  const { spaces: loaded, refused } = parseOpenAir(await f.text());
-  spaces = loaded;
-  // ESP-001's display starts as words; the map (CAR) will draw them. Refusals are COUNTED
-  // out loud — a volume silently dropped is a TMA the pilot thinks is loaded.
-  (app.querySelector('#oa-label') as HTMLElement).textContent =
-    `${loaded.length} volumes loaded${refused ? `, ${refused} refused` : ''}`;
+  const text = await f.text();
+  const r = adoptAirspace(text);
+  (app.querySelector('#oa-label') as HTMLElement).textContent = r.label;
+  if (r.adopted) void saveFlightFile(kv, 'airspace', { name: f.name, text });
   render(state, link);
 };
 
@@ -465,6 +502,12 @@ bf.innerHTML = `
     <span id="bf-progress" class="progress"></span>
   </form>
   <div id="bf-completeness"></div>
+  <h2>pack shelf</h2>
+  <div id="bf-shelf"></div>
+  <div class="cache-line">
+    <label>cache budget <input id="bf-budget" size="5" value="200" inputmode="numeric" /> MB</label>
+    <div id="bf-cache"></div>
+  </div>
   <label class="hour">hour (UTC)
     <input id="bf-hour" type="range" min="0" max="23" value="12" />
     <span id="bf-hour-val" class="val">12:00</span>
@@ -502,6 +545,9 @@ const hourVal = q('#bf-hour-val');
 const progressEl = q('#bf-progress');
 const netEl = q('#bf-net');
 const completenessEl = q('#bf-completeness');
+const shelfEl = q('#bf-shelf');
+const cacheEl = q('#bf-cache');
+const budgetIn = q<HTMLInputElement>('#bf-budget');
 const briefingEl = q('#bf-briefing');
 const emagramEl = q('#bf-emagram');
 const sandboxFs = q<HTMLFieldSetElement>('#bf-sandbox');
@@ -536,6 +582,10 @@ let bfMix: number[] = LIFT_COMPS.map(() => 1 / LIFT_COMPS.length);
 // Refreshes overlap (a keystroke mid-download, a tab switch mid-read); the newest one wins
 // and the stale ones discard their answer instead of painting yesterday's spec.
 let bfEpoch = 0;
+// The last eviction plan actually executed, so the cache line can say what happened rather
+// than implying an enforcement nobody ran. Null until one runs — a dash, not "evicted
+// nothing" (POT-007's rule applies to housekeeping too).
+let lastPlan: EvictionPlan | null = null;
 
 // ---- reading the form ----
 
@@ -546,22 +596,15 @@ const num = (el: HTMLInputElement): number | null => {
   return Number.isFinite(v) ? v : null;
 };
 
-/** The pack the form currently asks for, or null while the ask is incomplete. The id folds
- *  day and centre (2 decimals ≈ 1 km — packs a village apart share their cache); the area is
- *  the radius turned into degrees at this latitude. |lat| ≤ 85 is web mercator's own edge:
- *  beyond it the tile pyramid has nothing to promise. */
+/** The pack the form currently asks for, or null while the ask is incomplete. The fold
+ *  itself is core's specFor — the ONE spelling, shared with the shelf's 'open', so an opened
+ *  pack re-provisions the IDENTICAL spec instead of a rounded cousin under the same id (a
+ *  confirmed finding). |lat| ≤ 85 is web mercator's own edge. */
 function readSpec(): PackSpec | null {
   const lon = num(lonIn), lat = num(latIn), radius = num(radiusIn), day = dayIn.value;
   if (lon == null || lat == null || radius == null || !day) return null;
   if (Math.abs(lon) > 180 || Math.abs(lat) > 85 || !(radius > 0)) return null;
-  const dLat = radius * 1000 / M_PER_LAT;
-  const dLon = radius * 1000 / mPerLng(lat);
-  return {
-    id: `${day}:${lon.toFixed(2)}:${lat.toFixed(2)}`,
-    name: `${radius} km around ${lat.toFixed(2)}, ${lon.toFixed(2)} on ${day}`,
-    area: { west: lon - dLon, east: lon + dLon, south: lat - dLat, north: lat + dLat },
-    day,
-  };
+  return specFor(lon, lat, radius, day);
 }
 
 // Sandbox knobs are the pilot's what-if dials (WX-005), not measurements — a blank dial reads
@@ -635,6 +678,56 @@ function renderNet(): void {
     navigator.onLine, isPersistent(kv), bfHeld?.weather?.fetchedAt ?? null, Date.now());
 }
 
+/** The cache ceiling as typed, normalized by core's own rule (OFF-002/006): an unparsable
+ *  or non-positive value falls back to the default rather than to zero — a 0 MB ceiling read
+ *  off a typo would evict everything the pilot provisioned. */
+const budgetMB = (): number => normalizeSettings({ cacheBudgetMB: Number(budgetIn.value) }).cacheBudgetMB;
+const settingsOf = (): Settings => ({ cacheBudgetMB: budgetMB() });
+
+/** Persist the shelf and repaint — WITH a catch (a confirmed finding): a pin that fails to
+ *  write exists only in memory and silently dies at the very restart it exists for. The
+ *  failure becomes words on the cache line; the repaint still runs so the screen shows the
+ *  in-memory truth it is now the only holder of. */
+async function persistShelf(): Promise<void> {
+  try {
+    await saveShelf(kv, shelf);
+  } catch (e) {
+    cacheEl.innerHTML = `<div class="cache"><div class="over-budget">shelf could not be saved — ${
+      String(e)} — pins and packs shown here will NOT survive a restart</div></div>`;
+  }
+  await refreshShelf();
+}
+
+/** Repaint the shelf and the cache line from a fresh measurement (OFF-010): what each pack
+ *  holds is re-measured off the store, never remembered from the last paint. Offers exist
+ *  only while the network does — OFF-009's own wording is "when the connection reappears,
+ *  PROPOSE" — and nothing here downloads anything; the offer's button does, when tapped.
+ *  Same overlap discipline as refreshBriefing: the newest call wins, stale answers are
+ *  dropped unpainted. */
+let shelfEpoch = 0;
+async function refreshShelf(): Promise<void> {
+  const epoch = ++shelfEpoch;
+  const snap = shelf;
+  try {
+    const heldById = await heldForShelf(snap, kv);
+    const inv = await tileInventory(kv);
+    if (epoch !== shelfEpoch) return;
+    const now = Date.now();
+    const completenessById = new Map<string, Completeness>();
+    for (const e of snap)
+      completenessById.set(e.spec.id, completeness(e.spec, heldById.get(e.spec.id)!, Z, now));
+    const offers = navigator.onLine ? updateOffers(snap, heldById, Z, now) : [];
+    shelfEl.innerHTML = shelfHtml(sortedShelf(snap), completenessById, offers);
+    cacheEl.innerHTML = cacheHtml(inv.reduce((sum, e) => sum + e.bytes, 0), budgetMB(), lastPlan);
+  } catch (e) {
+    if (epoch !== shelfEpoch) return;
+    // A failed re-measurement must not leave yesterday's panel posing as fresh (OFF-010's
+    // promise is the MEASUREMENT, not the pixels): say the measurement failed, in place.
+    shelfEl.innerHTML = `<div class="shelf"><div class="shelf-empty">shelf could not be re-measured — ${String(e)}</div></div>`;
+    cacheEl.innerHTML = '';
+  }
+}
+
 /** The full refresh: form → spec → holdings → completeness → weather → day. Runs on screen
  *  entry, on any spec-shaping input, on the sandbox controls, and after a provisioning run —
  *  everything that can change WHAT is being briefed rather than merely which hour of it. */
@@ -697,6 +790,45 @@ async function refreshBriefing(): Promise<void> {
 const boundFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
   fetch(input, init)) as typeof fetch;
 
+/** One provisioning run: the download, then the bookkeeping the download earns — the pack
+ *  goes on the shelf (OFF-010), the shelf is saved (OFF-002), and the budget is enforced
+ *  right after the cache grew, the one moment eviction has fresh facts to work from
+ *  (OFF-006). Shared by the form's Provision button and by an accepted update offer:
+ *  OFF-009's "accept" is nothing more than provisioning the same spec again. */
+async function provision(spec: PackSpec): Promise<void> {
+  progressEl.textContent = 'starting…';
+  // The pack goes on the shelf BEFORE the download (a confirmed finding): an eviction that
+  // runs mid-download — a remove click, a concurrent provision finishing — must see the
+  // arriving tiles as OWNED, or it classifies them as orphans and evicts the pack while it
+  // is being written. Shelving is the claim of ownership; downloading fills it.
+  shelf = upsertPack(shelf, spec, Date.now());
+  await persistShelf();
+  try {
+    const { ok, failed } = await downloadPack(spec, kv, boundFetch, (done, total) => {
+      progressEl.textContent = `${done}/${total}`;
+    }, Date.now);
+    // Counts, not verdicts: the completeness panel below is where failures become words
+    // (OFF-010), and refreshBriefing repaints it from what actually landed.
+    progressEl.textContent = failed === 0
+      ? `done — ${ok} items held`
+      : `${ok} held, ${failed} failed — see completeness below`;
+  } catch {
+    // downloadPack counts item failures instead of throwing; only the store itself dying can
+    // land here. What was written IS written — re-measure and let completeness say the rest.
+    progressEl.textContent = 'download interrupted — see completeness below';
+  }
+  // The bookkeeping is NOT inside the try (a confirmed finding): a failed shelf-save must
+  // not print 'download interrupted' over a download that completed. Each failure gets its
+  // own words, in its own place.
+  try {
+    lastPlan = await enforceBudget(kv, shelf, budgetMB() * BYTES_PER_MB);
+  } catch (e) {
+    progressEl.textContent += ` — cache enforcement failed: ${String(e)}`;
+  }
+  void refreshShelf();
+  void refreshBriefing();
+}
+
 q<HTMLFormElement>('#bf-form').onsubmit = e => {
   e.preventDefault();
   const spec = readSpec();
@@ -704,23 +836,71 @@ q<HTMLFormElement>('#bf-form').onsubmit = e => {
     progressEl.textContent = 'enter a centre, a radius and a day first';
     return;
   }
-  progressEl.textContent = 'starting…';
-  void downloadPack(spec, kv, boundFetch, (done, total) => {
-    progressEl.textContent = `${done}/${total}`;
-  }, Date.now).then(({ ok, failed }) => {
-    // Counts, not verdicts: the completeness panel below is where failures become words
-    // (OFF-010), and refreshBriefing repaints it from what actually landed.
-    progressEl.textContent = failed === 0
-      ? `done — ${ok} items held`
-      : `${ok} held, ${failed} failed — see completeness below`;
-    void refreshBriefing();
-  }, () => {
-    // downloadPack counts item failures instead of throwing; only the store itself dying can
-    // land here. What was written IS written — re-measure and let completeness say the rest.
-    progressEl.textContent = 'download interrupted — see completeness below';
-    void refreshBriefing();
-  });
+  void provision(spec);
 };
+
+// The shelf's four verbs ride ONE listener on the container — the delegation contract
+// shelf-ui documents. The rows repaint freely underneath it, the handler survives, and the
+// data-act / data-id pair is the entire coupling between those strings and this code.
+shelfEl.onclick = e => {
+  const btn = (e.target as HTMLElement).closest('button[data-act]') as HTMLButtonElement | null;
+  const id = btn?.dataset.id;
+  if (!btn || !id) return;
+  const entry = shelf.find(en => en.spec.id === id);
+  if (!entry) return;                     // a click racing a repaint: nothing left to act on
+  switch (btn.dataset.act) {
+    case 'pin':
+      // OFF-007: the pilot's mark, toggled and saved in the same breath — a pin living only
+      // in memory would protect nothing past the very restart it exists for. persistShelf
+      // says so out loud if the write fails, instead of losing the pin silently.
+      shelf = setPinned(shelf, id, !entry.pinned);
+      void persistShelf();
+      break;
+    case 'remove':
+      // removePack refuses a pinned pack on its own (and the row hides the button); the save
+      // and the sweep run on whatever core answered. The sweep matters: the removed pack's
+      // unshared tiles just became orphans, exactly what the budget evicts first.
+      shelf = removePack(shelf, id);
+      void (async () => {
+        try { lastPlan = await enforceBudget(kv, shelf, budgetMB() * BYTES_PER_MB); } catch { /* next sweep */ }
+        await persistShelf();
+      })();
+      break;
+    case 'open': {
+      // Opening is copying the promise back into the form — the TYPED ask when the spec
+      // carries it (specFor keeps centre and radiusKm verbatim), so re-provisioning rebuilds
+      // the IDENTICAL spec; the derived-and-rounded form is only for shelves persisted
+      // before the typed ask existed. The touch keeps the MRU order telling the truth.
+      const c = entry.spec.centre ?? centreOf(entry.spec);
+      lonIn.value = String(c.lon);
+      latIn.value = String(c.lat);
+      radiusIn.value = String(entry.spec.radiusKm ?? Math.round(radiusMOf(entry.spec) / 100) / 10);
+      dayIn.value = entry.spec.day;
+      shelf = touchPack(shelf, id, Date.now());
+      void persistShelf();
+      void refreshBriefing();
+      break;
+    }
+    case 'update':
+      // The accepted offer (OFF-009): provisioning again, nothing more — same spec, same
+      // progress line, same bookkeeping. Nothing downloaded until this click.
+      void provision(entry.spec);
+      break;
+  }
+};
+
+// A committed ceiling ACTS (a confirmed finding: a setting that only repaints is inert —
+// lowering it never evicted anything until the next provisioning). onchange fires on commit
+// (blur/enter), never per keystroke, so a half-typed number cannot start an eviction; the
+// committed value is persisted (OFF-002) and enforced in the same breath.
+budgetIn.onchange = () => void (async () => {
+  budgetIn.value = String(budgetMB());               // show the value that will actually rule
+  try {
+    await saveSettings(kv, settingsOf());
+    lastPlan = await enforceBudget(kv, shelf, budgetMB() * BYTES_PER_MB);
+  } catch { /* the cache line repaints from what really happened either way */ }
+  await refreshShelf();
+})();
 
 for (const el of [lonIn, latIn, radiusIn, dayIn]) el.onchange = () => void refreshBriefing();
 
@@ -797,9 +977,15 @@ igcIn.onchange = async e => {
   renderDay();
 };
 
-// Connectivity is a state, not an event to miss: the chip follows the browser's own word.
-window.addEventListener('online', renderNet);
-window.addEventListener('offline', renderNet);
+// Connectivity is a state, not an event to miss: the chip follows the browser's own word,
+// and the shelf re-derives its offers — OFF-009's moment is exactly this listener, and the
+// only thing that happens here is a PROPOSAL appearing; no byte moves until the pilot taps.
+const onNetChange = (): void => {
+  renderNet();
+  if (!bf.hidden) void refreshShelf();
+};
+window.addEventListener('online', onNetChange);
+window.addEventListener('offline', onNetChange);
 
 // Age is a clock, not a snapshot: a "2 h old" chip rendered at breakfast must not still say
 // 2 h at noon, and a snapshot crosses the 48 h staleness line without any event firing. One
@@ -837,12 +1023,44 @@ function showTab(which: 'fly' | 'briefing'): void {
       lonIn.value = state.fix.lon.toFixed(3);
       latIn.value = state.fix.lat.toFixed(3);
     }
-    // Screen entry re-measures (OFF-010): the completeness shown is of the disk as it IS,
-    // not as it was when something last rendered.
+    // Screen entry re-measures (OFF-010): the completeness and the shelf shown are of the
+    // disk as it IS, not as it was when something last rendered.
     void refreshBriefing();
+    void refreshShelf();
   }
 }
 tabFly.onclick = () => showTab('fly');
 tabBf.onclick = () => showTab('briefing');
 
+// ---- what came back from disk (OFF-002) ----
+
+// The airspace and task the pilot loaded last session, fed through the SAME adopt paths the
+// file inputs use — a restored file that parsed differently from a chosen one would be two
+// truths about one file. The label names the file so the pilot knows what is armed without
+// re-picking it, and says "(restored)" so it cannot be mistaken for a choice made today.
+async function restoreFlightFiles(): Promise<void> {
+  const oa = await loadFlightFile(kv, 'airspace');
+  if (oa) {
+    (app.querySelector('#oa-label') as HTMLElement).textContent =
+      `${adoptAirspace(oa.text).label} (restored: ${oa.name})`;
+  }
+  const tk = await loadFlightFile(kv, 'task');
+  if (tk) {
+    const label = adoptTask(tk.text);
+    if (label) {
+      (app.querySelector('#tsk-label') as HTMLElement).textContent =
+        `${label} (restored: ${tk.name})`;
+    }
+  }
+  if (oa || tk) render(state, link);
+}
+
+// The settings, back into the form they rule from (OFF-002: configuration persists). The
+// input's built-in value is only the default of a first launch.
+async function restoreSettings(): Promise<void> {
+  budgetIn.value = String((await loadSettings(kv)).cacheBudgetMB);
+}
+
 render(state, link);
+void restoreFlightFiles();
+void restoreSettings();
