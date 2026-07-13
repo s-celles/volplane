@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "soaring-core": "github:s-celles/soaring-core#v0.6.0",
-    "soaring-data": "github:s-celles/soaring-data#v0.2.2",
+    "soaring-data": "github:s-celles/soaring-data#v0.3.0",
     "upng-js": "^2.1.0"
   },
   "devDependencies": {
