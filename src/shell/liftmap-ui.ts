@@ -15,6 +15,7 @@ import {
   LIFT_COMPS, simplexVerts, weightsFromPoint, pointFromWeights, clampToSimplex,
 } from 'soaring-core/lift/mix';
 import { mPerLng, M_PER_LAT } from 'soaring-core/geo';
+import type { T } from './infobox-ui';
 
 // ---- the canvas, reduced to what we actually use ----
 
@@ -164,13 +165,15 @@ export function mixerHit(px: number, py: number, on: boolean[], sizePx: number):
  *  with: no wind, no sun, no resonance), or nothing (the model looked and found nothing).
  *  The `.modelled` class is the same vocabulary shell-briefing-ui uses for forecast-derived
  *  values — coordinated by class NAME so the two files stay disjoint. */
-export function legendHtml(on: boolean[], map?: LiftMap | null): string {
+export function legendHtml(on: boolean[], t: T, map?: LiftMap | null): string {
   const rows = enabledIdx(on).map(i => {
     const c = LIFT_COMPS[i];
     const layer = map?.components[c.key as keyof LiftMap['components']];
     const note = !layer ? ''
-      : !layer.active ? `<span class="legend-note inactive">inactive — nothing to model with</span>`
-      : layer.readiness < 0.995 ? `<span class="legend-note">terrain ${Math.round(layer.readiness * 100)}% known</span>`
+      : !layer.active ? `<span class="legend-note inactive">${t('legend.inactive')}</span>`
+      : layer.readiness < 0.995 ? `<span class="legend-note">${t('legend.terrainKnown', {
+          pct: Math.round(layer.readiness * 100),
+        })}</span>`
       : '';
     return `<div class="legend-row modelled">`
       + `<span class="swatch" style="background:rgb(${c.color[0]},${c.color[1]},${c.color[2]})"></span>`

@@ -15,8 +15,15 @@
 //   clothes of one that was (POT-007). The pilot who glances at "0 km/h on task" and reads it
 //   as bad news is being lied to by a rounding of null.
 
+//
+// And it prints the pilot's units (CFG-003), not this file's. The distances used to be kilometres
+// and the speeds km/h whatever he had chosen — the ribbon sits directly above InfoBoxes that DID
+// honour his choice, so a pilot on the aviation preset read knots in the box and km/h in the
+// ribbon, a metre apart. The figures are still core's; only the last centimetre is here.
 import { scoredDistanceM, type Task, type TaskProgress, type AatProgress } from '../core/task';
 import { isAat, type TaskStats } from '../core/taskstats';
+import { formatText, type UnitPrefs } from '../core/units';
+import type { T } from './infobox-ui';
 
 /** Waypoint names come from the pilot's own file and we did not write it. */
 function esc(s: string): string {
@@ -27,13 +34,14 @@ function esc(s: string): string {
 export const DASH = '—';
 const shown = (v: string | null): string => v ?? DASH;
 
-const kmText = (m: number | null): string | null =>
-  m == null ? null : `${(m / 1000).toFixed(1)} km`;
+const distText = (m: number | null, u: UnitPrefs): string | null =>
+  m == null ? null : formatText(m, 'distance', u.distance);
 
-/** Speed on task in km/h, because that is the unit the pilot's task sheet, his club and his
- *  competition all speak — core keeps m/s and the conversion happens here, at the glass. */
-const kmhText = (ms: number | null): string | null =>
-  ms == null ? null : `${(ms * 3.6).toFixed(0)} km/h`;
+/** Speed on task, in the unit the pilot chose to read speed in — core keeps m/s and the conversion
+ *  happens here, at the glass, through the one table. His task sheet may well say km/h; that is a
+ *  reason for km/h to be the DEFAULT, not a reason for the ribbon to overrule him. */
+const speedText = (ms: number | null, u: UnitPrefs): string | null =>
+  ms == null ? null : formatText(ms, 'speed', u.speed);
 
 /** h:mm:ss, so an ETA and an elapsed time read as clock time rather than as a pile of seconds.
  *  Under an hour it drops to m:ss — a two-hour ETA and a two-minute one must not look alike. */
@@ -66,11 +74,12 @@ const fig = (label: string, value: string | null): string =>
  *  nothing to say would teach the eye to stop looking at that strip of screen, and the eye keeps
  *  not-looking on the day the strip finally matters. */
 export function taskRibbonHtml(
-  t: Task | null, p: TaskProgress | null, a: AatProgress | null, s: TaskStats | null,
+  task: Task | null, p: TaskProgress | null, a: AatProgress | null, s: TaskStats | null,
+  u: UnitPrefs, t: T,
 ): string {
-  if (!t || !p) return '';
+  if (!task || !p) return '';
 
-  const chain = t.points.map((pt, i) => {
+  const chain = task.points.map((pt, i) => {
     const done = p.validatedAt[i] != null;
     const current = i === p.next;
     return `<span class="tsk-pt${done ? ' done' : ''}${current ? ' current' : ''}">${esc(pt.wp.name)}</span>`;
@@ -78,26 +87,27 @@ export function taskRibbonHtml(
 
   // The scorer's number, asked of the scorer. The ribbon does not keep a second opinion about
   // distance flown, and a missing AAT progress is a missing answer, not a zero.
-  const scored = a ? scoredDistanceM(t, p, a) : null;
+  const scored = a ? scoredDistanceM(task, p, a) : null;
 
   const figs = [
-    fig('scored', kmText(scored)),
-    fig('left', kmText(s?.remainingM ?? null)),
-    fig('ETA', durText(s?.etaS ?? null)),
-    fig('elapsed', durText(s?.elapsedS ?? null)),
-    fig('on task', kmhText(s?.achievedMs ?? null)),
+    fig(t('task.scored'), distText(scored, u)),
+    fig(t('task.left'), distText(s?.remainingM ?? null, u)),
+    fig(t('task.eta'), durText(s?.etaS ?? null)),
+    fig(t('task.elapsed'), durText(s?.elapsedS ?? null)),
+    fig(t('task.onTask'), speedText(s?.achievedMs ?? null, u)),
     // TSK-007 asks for the speed achieved AND the speed required, on every task and permanently.
     // It used to appear only on an AAT, so a pilot on an ordinary racing task — the commonest
     // task there is — was shown no answer at all to "am I fast enough to get home in time", not
     // even a dash. It is present here always: dashed until a task time is entered, which is the
     // app admitting it was not told the number rather than quietly dropping the question.
-    fig('required', kmhText(s?.requiredMs ?? null)),
+    fig(t('task.required'), speedText(s?.requiredMs ?? null, u)),
   ];
   // The over/under stays AAT-only, because only on an AAT is coming home early a mistake with a
   // remedy: the pilot spends the spare time by flying deeper into the areas. On a racing task
   // there is nowhere to spend it, and the figure would be an instruction with no action.
-  if (isAat(t)) figs.push(fig('vs min time', overUnderText(s?.overUnderS ?? null)));
+  if (isAat(task)) figs.push(fig(t('task.vsMinTime'), overUnderText(s?.overUnderS ?? null)));
 
-  const complete = p.next >= t.points.length ? ' <span class="tsk-done">COMPLETE</span>' : '';
-  return `<div class="tsk">Task (${esc(t.rules)}): ${chain}${complete} ${figs.join(' ')}</div>`;
+  const complete = p.next >= task.points.length
+    ? ` <span class="tsk-done">${esc(t('task.complete'))}</span>` : '';
+  return `<div class="tsk">${esc(t('task.title'))} (${esc(task.rules)}): ${chain}${complete} ${figs.join(' ')}</div>`;
 }

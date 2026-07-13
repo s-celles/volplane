@@ -14,6 +14,8 @@ import { shadeGrid, type ShadeGrid, type ShadeView } from '../core/hillshade';
 import type { Alternate } from '../core/landables';
 import type { ElevSampler } from 'soaring-core/ports';
 import { mPerLng, M_PER_LAT } from 'soaring-core/geo';
+import { DEFAULT_UNITS, formatText, type UnitPrefs } from '../core/units';
+import type { T } from './infobox-ui';
 
 export interface MapPaint2D extends Paint2D {
   strokeStyle: string;
@@ -66,10 +68,15 @@ export interface MapInput {
   /** SYS-002: the fix everything here was computed from is the LAST one received, not a current
    *  one. The rings are a claim about ONE position and ONE height, and both have aged. */
   stale?: boolean;
+  /** CFG-003, in the two places this canvas prints a NUMBER: the judging radius and a named peak's
+   *  elevation. Optional because most of this painter draws geometry, which has no unit — and the
+   *  fallback is DEFAULT_UNITS (metric), which is what the canvas already drew. The Fly screen
+   *  always passes the pilot's own. */
+  units?: UnitPrefs;
 }
 
-export const RANGE_LABEL = 'range: still air, no wind';
-export const REACH_LABEL = 'reach: over terrain, wind included';
+// IHM-006: the labels are catalogue ids now — 'map.range' and 'map.reach'. They are still the
+// honesty of this layer: an unlabelled range ring is a promise about air nobody measured.
 
 /** Ground the DEM has not answered for. It is neither the hypsometric ramp (which would read as
  *  flat ground) nor the black background (which reads as sea): it is a hatch, laid on every
@@ -79,20 +86,19 @@ export const UNLOADED_FILL = '#1c222b';
 /** The readiness figure, said out loud, in the cross-section's voice (xsection-ui.ts). A map
  *  that is 40% guesswork must SAY it is 40% guesswork; the hatch alone is a hint, the number is
  *  the confession. */
-export const TERRAIN_UNLOADED_LABEL = (pct: number) => `${pct}% of the visible ground is NOT loaded`;
+// The id is 'map.terrainUnloaded'.
 
 /** The judging boundary, said out loud, in the same voice. The circle alone would be a mark the
  *  pilot has to interpret; the sentence is what makes the empty ground outside it read as an
  *  unasked question rather than as an answer. */
-export const LANDABLE_SCOPE_LABEL = (judged: number, inRadius: number, radiusM: number): string =>
-  `fields: ${judged} of ${inRadius} judged within ${Math.round(radiusM / 1000)} km — none drawn beyond`;
+// The id is 'map.landableScope'.
 
 /** SYS-002 on the canvas. The rings keep their colours — a verdict that WAS measured is not
  *  unmeasured now, and repainting them grey would collapse them into 'indeterminate', which in
  *  this app means something else entirely ("judged, DEM silent"). They are dimmed and captioned
  *  instead, and the top field is no longer NAMED: naming one field is an offer, and an offer made
  *  from a fix that may be minutes old is exactly the promise SYS-002 exists to withdraw. */
-export const LANDABLES_STALE_LABEL = 'fields: judged at the LAST fix, not from now';
+// The id is 'map.landablesStale'.
 
 /** LND-003's three states, deliberately wearing the same three colours the reach polygon already
  *  uses for glide / terrain / unknown. One visual vocabulary for one distinction, learnt once:
@@ -155,7 +161,9 @@ function shadeFor(view: View, terrain: { elev: ElevSampler; epoch: number }): Sh
  *  ground goes down as a hatch. Note what is NOT here: no interpolation across a hole, no
  *  "nearest known cell", no smoothing that would carry a colour over ground the DEM never
  *  answered for. A hole stays a hole all the way to the pixel. */
-function paintTerrain(ctx: MapPaint2D, view: View, terrain: { elev: ElevSampler; epoch: number }): void {
+function paintTerrain(
+  ctx: MapPaint2D, view: View, terrain: { elev: ElevSampler; epoch: number }, t: T,
+): void {
   const grid = shadeFor(view, terrain);
   ctx.globalAlpha = 1;
 
@@ -183,7 +191,7 @@ function paintTerrain(ctx: MapPaint2D, view: View, terrain: { elev: ElevSampler;
     ctx.globalAlpha = 0.9;
     ctx.fillStyle = '#8b93a1';
     ctx.font = '11px system-ui, sans-serif';
-    ctx.fillText(TERRAIN_UNLOADED_LABEL(Math.round(100 * grid.unknownFraction)), 8, view.hPx - 8);
+    ctx.fillText(t('map.terrainUnloaded', { pct: Math.round(100 * grid.unknownFraction) }), 8, view.hPx - 8);
   }
 }
 
@@ -228,6 +236,7 @@ function paintLandables(
 function paintLandableScope(
   ctx: MapPaint2D, view: View, at: { lon: number; lat: number },
   scope: { radiusM: number; judged: number; inRadius: number }, stale: boolean,
+  units: UnitPrefs, t: T,
 ): void {
   const [x, y] = project(view, at.lon, at.lat);
   ctx.strokeStyle = LANDABLE_COLOR.indeterminate;
@@ -240,8 +249,11 @@ function paintLandableScope(
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = '#8b93a1';
   ctx.font = '11px system-ui, sans-serif';
-  ctx.fillText(LANDABLE_SCOPE_LABEL(scope.judged, scope.inRadius, scope.radiusM), 8, view.hPx - 24);
-  if (stale) ctx.fillText(LANDABLES_STALE_LABEL, 8, view.hPx - 40);
+  ctx.fillText(t('map.landableScope', {
+    judged: scope.judged, inRadius: scope.inRadius,
+    dist: formatText(scope.radiusM, 'distance', units.distance, 0),
+  }), 8, view.hPx - 24);
+  if (stale) ctx.fillText(t('map.landablesStale'), 8, view.hPx - 40);
   ctx.globalAlpha = 1;
 }
 
@@ -265,6 +277,7 @@ const COAST = '#3b4a5c', BORDER = '#4a3f52', LAKE = '#24384d', PEAK = '#6b7686';
 function paintLandmarks(
   ctx: MapPaint2D, view: View,
   lm: { coastline: readonly Shape[]; borders: readonly Shape[]; lakes: readonly Shape[]; peaks: readonly Peak[] },
+  units: UnitPrefs,
 ): void {
   // The window, in degrees, with a margin so a line that merely CROSSES the frame is not culled
   // for having no vertex inside it.
@@ -310,14 +323,16 @@ function paintLandmarks(
     ctx.lineTo(x + 5, y + 4);
     ctx.stroke();
     ctx.fillStyle = PEAK;
-    ctx.fillText(p.elevM == null ? p.name : `${p.name} ${p.elevM} m`, x + 8, y + 4);
+    ctx.fillText(
+      p.elevM == null ? p.name : `${p.name} ${formatText(p.elevM, 'altitude', units.altitude)}`,
+      x + 8, y + 4);
   }
 }
 
-export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
+export function paintMap(ctx: MapPaint2D, view: View, input: MapInput, t: T): void {
   const {
     state: s, trail, spaces, traffic, goal, rangeM, reach, terrain, landables,
-    landableScope, stale = false,
+    landableScope, stale = false, units = DEFAULT_UNITS,
   } = input;
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#10141a';
@@ -326,8 +341,8 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
   // The ground goes down before anything that stands on it (TER-001). Everything after this —
   // the wall the reach march found, the field the glide can still have — is a claim ABOUT this
   // terrain, and a claim drawn under its own subject reads as a claim about something else.
-  if (terrain) paintTerrain(ctx, view, terrain);
-  if (input.landmarks) paintLandmarks(ctx, view, input.landmarks);
+  if (terrain) paintTerrain(ctx, view, terrain, t);
+  if (input.landmarks) paintLandmarks(ctx, view, input.landmarks, units);
 
   // Airspace next (ESP-001's display).
   for (const a of spaces) {
@@ -373,7 +388,7 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
     ctx.globalAlpha = 0.9;
     ctx.fillStyle = '#8b93a1';
     ctx.font = '11px system-ui, sans-serif';
-    ctx.fillText(REACH_LABEL, 8, 16);
+    ctx.fillText(t('map.reach'), 8, 16);
   } else if (rangeM != null && s.fix) {
     // The fallback circle: still air, no terrain. It is drawn ONLY when the reach could not
     // be marched, and it keeps saying out loud what it assumes — an unlabelled range ring is
@@ -387,7 +402,7 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
     ctx.globalAlpha = 0.8;
     ctx.fillStyle = '#4caf78';
     ctx.font = '11px system-ui, sans-serif';
-    ctx.fillText(RANGE_LABEL, 8, 16);
+    ctx.fillText(t('map.range'), 8, 16);
   }
 
   // The trail, then the glider on top of it.
@@ -407,7 +422,7 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
   // must never be hidden by one. And the boundary of what was asked goes down with them — the
   // rings and their scope are one statement, and half of it drawn alone is the half that misleads.
   if (landables && landables.length > 0) paintLandables(ctx, view, landables, stale);
-  if (landableScope && s.fix) paintLandableScope(ctx, view, s.fix, landableScope, stale);
+  if (landableScope && s.fix) paintLandableScope(ctx, view, s.fix, landableScope, stale, units, t);
 
   if (s.fix) {
     const [x, y] = project(view, s.fix.lon, s.fix.lat);

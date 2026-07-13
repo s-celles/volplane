@@ -10,6 +10,10 @@
 // defaults can never be two files' opinions.
 
 import { parsePlr, DEFAULT_POLAR, type Polar } from 'soaring-core/polar';
+import { LANGS, isLang, type Lang } from './i18n';
+import { DEFAULT_UNITS, QUANTITIES, toSI, type UnitPrefs, type UnitSystem } from './units';
+import { DEFAULT_PAGES, sanitizePages, type Page } from './infobox';
+import { gliderById, polarOf } from './polarlib';
 
 /** Everything the pilot can configure that must come back at the next launch. */
 export interface Settings {
@@ -29,12 +33,34 @@ export interface Settings {
    *  every alert, which is a choice the pilot must make explicitly, not inherit from a
    *  corrupted record. */
   monitoredClasses: string[] | null;
+  /** The language the interface speaks (IHM-006). A value, not a detection: the shell may READ the
+   *  OS locale, but what the pilot chose outranks it and lands here. */
+  lang: Lang;
+  /** One unit system PER QUANTITY (CFG-003). Stored whole rather than as a preset name, because
+   *  the mixed panel — feet, knots, m/s — is the normal case and no preset can name it. */
+  units: UnitPrefs;
+  /** The pilot's InfoBox pages (IHM-001, IHM-002), as ids only. Never the box definitions
+   *  themselves: a persisted definition is a definition that cannot be improved by a release. */
+  pages: Page[];
+  /** Which page he was on. Always the id of one of `pages` — the normalizer guarantees it, so no
+   *  renderer ever has to handle "the active page does not exist". */
+  activePageId: string;
+  /** The library glider he picked (CFG-002), with the mass he flies it at — that massKg IS the
+   *  "adjustable" of "polaires prédéfinies et ajustables". Null massKg means the entry's own
+   *  reference mass: we do not invent his ballast (POT-007). Null altogether means he picked no
+   *  library glider — either he imported his own .plr, or the built-in default flies. */
+  glider: { libId: string; massKg: number | null } | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   cacheBudgetMB: 200,
   polar: null,
   monitoredClasses: null,
+  lang: 'en',
+  units: DEFAULT_UNITS,
+  pages: DEFAULT_PAGES.map(p => ({ ...p, boxIds: [...p.boxIds] })),
+  activePageId: DEFAULT_PAGES[0]!.id,
+  glider: null,
 };
 
 // Each field repairs itself, so the whole-record normalizer below stays a plain roll call
@@ -70,6 +96,58 @@ function repairClasses(v: unknown): string[] | null {
   return cleaned.length > 0 ? cleaned : null;
 }
 
+function repairLang(v: unknown): Lang {
+  return typeof v === 'string' && isLang(v) ? v : 'en';
+}
+
+// Row by row, exactly as the settings screen edits it: a mangled SPEED unit costs the speed unit
+// and nothing else. Falling back to DEFAULT_UNITS wholesale would let one bad string quietly move
+// the pilot's altitude from feet back to metres — a display he never touched, changed by a field
+// he never touched, which is how a pilot stops trusting his settings screen.
+const SYSTEMS: readonly UnitSystem[] = ['metric', 'imperial', 'aviation'];
+
+function repairUnits(v: unknown): UnitPrefs {
+  const r = (typeof v === 'object' && v !== null ? v : {}) as Record<string, unknown>;
+  const out = {} as UnitPrefs;
+  for (const q of QUANTITIES) {
+    const sys = r[q];
+    out[q] = typeof sys === 'string' && (SYSTEMS as readonly string[]).includes(sys)
+      ? (sys as UnitSystem)
+      : DEFAULT_UNITS[q];
+  }
+  return out;
+}
+
+// The active page must NAME one of the pages that survived. A stored id pointing at a page the
+// pilot deleted — or at a page sanitizePages dropped — would leave the dashboard rendering
+// nothing while the app insists everything is fine, so it falls back to the first page. There is
+// always a first page: sanitizePages never returns an empty list.
+function repairActivePage(v: unknown, pages: Page[]): string {
+  return typeof v === 'string' && pages.some(p => p.id === v) ? v : pages[0]!.id;
+}
+
+// A library id that no longer exists is not a glider, and pretending otherwise would fly the
+// pilot's final glide on somebody else's polar. It normalizes to null, and the default flies —
+// visibly, under its own name, which he can see.
+//
+// And the mass is repaired against the ENTRY, not merely against zero. A stored 45 kg for an
+// ASK 21 is arithmetically fine and aeronautically impossible, and the polar it produces — ten
+// times too steep, clamped at 19 m/s — would fly the pilot's final glide. Out of the plausible
+// band it normalizes to null, which means the polar as published: a glider we can defend, under a
+// mass the panel names.
+function repairGlider(v: unknown): Settings['glider'] {
+  if (typeof v !== 'object' || v === null) return null;
+  const { libId, massKg } = v as Record<string, unknown>;
+  const entry = typeof libId === 'string' ? gliderById(libId) : null;
+  if (typeof libId !== 'string' || entry === null) return null;
+  const { minKg, maxKg } = massBandKg(entry.refMassKg);
+  const mass = typeof massKg === 'number' && Number.isFinite(massKg)
+    && massKg >= minKg && massKg <= maxKg
+    ? massKg
+    : null;
+  return { libId, massKg: mass };
+}
+
 /** Rebuild settings from untrusted JSON — garbage in, defaults out, never a throw (the
  *  contract normalizeShelf keeps, for the same reason: a corrupted record costs the pilot
  *  his preferences, never his startup). Field by field: a mangled polar costs the polar
@@ -77,10 +155,16 @@ function repairClasses(v: unknown): string[] | null {
  *  DEFAULT_SETTINGS itself would let one caller's edit rewrite everyone's default. */
 export function normalizeSettings(raw: unknown): Settings {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const pages = sanitizePages(r.pages);
   return {
     cacheBudgetMB: repairBudget(r.cacheBudgetMB),
     polar: repairPolar(r.polar),
     monitoredClasses: repairClasses(r.monitoredClasses),
+    lang: repairLang(r.lang),
+    units: repairUnits(r.units),
+    pages,
+    activePageId: repairActivePage(r.activePageId, pages),
+    glider: repairGlider(r.glider),
   };
 }
 
@@ -106,11 +190,74 @@ export function fieldNumber(raw: string, fallback: number, min?: number): number
   return min != null && v < min ? fallback : v;
 }
 
+// ---- CFG-002's "ajustables": the mass, and the two ways it used to go wrong ----
+
+/** The band an all-up mass may plausibly lie in, as a fraction of the polar's reference mass.
+ *
+ *  The low end is a light pilot in a two-seater flown solo; the high end is the same glider with
+ *  its water tanks full (a Discus 2 is published at 350 kg and takes 200 litres — 1.57×). Outside
+ *  that band the number is not a ballast state, it is a typo, and the polar it would produce is
+ *  not the pilot's glider. */
+export const MASS_BAND = { lo: 0.7, hi: 1.6 } as const;
+
+export function massBandKg(refMassKg: number): { minKg: number; maxKg: number } {
+  return { minKg: refMassKg * MASS_BAND.lo, maxKg: refMassKg * MASS_BAND.hi };
+}
+
+/** The mass the pilot typed, in the unit HE reads, as kilograms — or null, meaning "the polar as
+ *  published" (POT-007: we do not invent his ballast).
+ *
+ *  Two separate holes are closed here, and both of them ended in the same place — a polar nobody
+ *  flew driving the speed-to-fly, the arrival height and the reachability of every field on the
+ *  divert list.
+ *
+ *  The UNIT. The settings screen offers a mass row that can say lb, and the mass box beside it was
+ *  read as kilograms whatever that row said. A pilot on the imperial preset typing his 1058 lb
+ *  all-up mass had it stored as 1058 KG: k = √(1058/361) = 1.71, every speed and every sink on his
+ *  polar scaled by that, and nothing on the screen naming the unit he was supposed to have used.
+ *  The value therefore arrives here WITH the system it was typed in, and goes through units.toSI —
+ *  the same table that printed the placeholder he was typing over.
+ *
+ *  The BAND. fieldNumber's floor was 1 kg and it had no ceiling, so '45' for '450' — one dropped
+ *  zero — was accepted, persisted, and scaled the ASK 21's polar by √0.1: a curve ten times too
+ *  steep with a maximum usable airspeed of 19 m/s, silently clamping every sink the computer priced
+ *  for the rest of the flight. A mass outside the plausible band is REFUSED, not clamped: clamping
+ *  would invent a ballast state he never typed, and the refusal is visible — the box repaints empty
+ *  over its placeholder, which is the reference mass, and the panel prints the band it accepts. */
+export function massKgFromField(raw: string, refMassKg: number, sys: UnitSystem): number | null {
+  const s = raw.trim();
+  if (s === '') return null;                    // an empty box is the reference mass, not zero
+  const typed = Number(s);
+  if (!Number.isFinite(typed)) return null;
+  const kg = toSI(typed, 'mass', sys);
+  const { minKg, maxKg } = massBandKg(refMassKg);
+  return kg >= minKg && kg <= maxKg ? kg : null;
+}
+
 /** The one spelling of "which polar flies", so main.ts and any future screen cannot hold two
  *  opinions. Never null: the normalizer vetted the stored text, and if a raced edit slips
  *  through anyway the default flies — a glide computer with no polar is not a state this app
- *  has. */
+ *  has.
+ *
+ *  The priority is explicit, and it is an argument, not an accident:
+ *
+ *   1. an IMPORTED `.plr` (settings.polar) — the pilot handed us the file for HIS glider, tail
+ *      number and all, and that outranks any library approximation of the type;
+ *   2. else a chosen LIBRARY glider (CFG-002), at the mass he flies it at today;
+ *   3. else the built-in default.
+ *
+ *  The shell keeps 1 and 2 mutually exclusive — picking a library glider clears the imported
+ *  polar, importing a .plr clears the library pick — but the ORDER is defined here anyway, so
+ *  that a raced write which somehow leaves both set still has one, knowable answer instead of
+ *  two screens each showing a different glide. */
 export function activePolar(s: Settings): Polar {
-  if (s.polar === null) return DEFAULT_POLAR;
-  return parsePlr(s.polar.plr, s.polar.name) ?? DEFAULT_POLAR;
+  if (s.polar !== null) {
+    const imported = parsePlr(s.polar.plr, s.polar.name);
+    if (imported !== null) return imported;
+  }
+  if (s.glider !== null) {
+    const entry = gliderById(s.glider.libId);
+    if (entry !== null) return polarOf(entry, s.glider.massKg);
+  }
+  return DEFAULT_POLAR;
 }

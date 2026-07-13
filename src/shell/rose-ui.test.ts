@@ -1,5 +1,10 @@
 import { expect, test, describe } from 'bun:test';
-import { roseSvg } from './rose-ui';
+import { roseSvg as roseSvgT } from './rose-ui';
+import { translator } from '../core/i18n';
+
+const en = translator('en');
+const roseSvg = (r: Parameters<typeof roseSvgT>[0], w?: number, h?: number): string =>
+  w == null ? roseSvgT(r, en) : roseSvgT(r, en, w, h);
 import { BINS, type Rose, type RoseBin } from '../core/circleassist';
 
 /** A rose whose bins are given by a vz per sector; null = unsampled. `noAdvice` says WHY there is

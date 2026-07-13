@@ -19,6 +19,7 @@
 import type { Completeness } from '../core/pack';
 import type { Shelf, ShelfEntry, UpdateOffer } from '../core/shelf';
 import type { EvictionPlan } from '../core/cachebudget';
+import type { T } from './infobox-ui';
 
 // Free text must not be able to break the markup around it. Pack names are pilot-typed, so
 // they are the obvious case — but ids and days pass through persistence and normalizeShelf
@@ -32,45 +33,41 @@ const esc = (s: string): string =>
 // OFF-011 asks for staleness NAMED, not colour-coded — so each offer reason has one sentence,
 // aligned with pack.ts's own wording (the completeness screen and the offer must never
 // disagree about the same snapshot).
-const REASON_WORDS: Record<UpdateOffer['reason'], string> = {
-  'tiles-missing': 'terrain: no tiles held — the pack cannot carry a flight',
-  'tiles-partial': 'terrain: tiles missing — the pack is not flight-ready',
-  'weather-missing': 'weather: no snapshot held',
-  'weather-stale': 'weather: snapshot fetched more than 48 h ago',
-  'weather-wrong-day': 'weather: snapshot is for another day',
-};
+const reasonText = (r: UpdateOffer['reason'], t: T): string => t(`shelf.reason.${r}`);
 
 // ---- OFF-010: the shelf, one row per promise ----
 
 // The flight-ready chip. A pack whose completeness nobody measured is UNKNOWN, not ready —
 // the dash, never a green light the measurement did not earn (POT-007 applied to readiness).
-const chip = (c: Completeness | undefined): string =>
+const chip = (c: Completeness | undefined, t: T): string =>
   c == null ? '<span class="badge unknown">—</span>'
-    : c.ready ? '<span class="badge ready">flight-ready</span>'
-    : '<span class="badge not-ready">NOT flight-ready</span>';
+    : c.ready ? `<span class="badge ready">${esc(t('shelf.flightReady'))}</span>`
+    : `<span class="badge not-ready">${esc(t('shelf.notFlightReady'))}</span>`;
 
-function rowHtml(e: ShelfEntry, c: Completeness | undefined, offer: UpdateOffer | undefined): string {
+function rowHtml(
+  e: ShelfEntry, c: Completeness | undefined, offer: UpdateOffer | undefined, t: T,
+): string {
   const id = esc(e.spec.id);
   // The pin toggle names the state the pack is IN, not the action alone: 'pinned — protected
   // from eviction' is both the current fact and, implicitly, what a tap will undo. That is
   // OFF-007's visibility requirement carried by the label itself.
   const pin = e.pinned
-    ? `<button data-act="pin" data-id="${id}">pinned — protected from eviction</button>`
-    : `<button data-act="pin" data-id="${id}">pin for flight</button>`;
+    ? `<button data-act="pin" data-id="${id}">${esc(t('shelf.pinned'))}</button>`
+    : `<button data-act="pin" data-id="${id}">${esc(t('shelf.pin'))}</button>`;
   const remove = e.pinned ? ''
-    : `<button data-act="remove" data-id="${id}">remove</button>`;
+    : `<button data-act="remove" data-id="${id}">${esc(t('shelf.remove'))}</button>`;
   // The offer line exists only when core proposed one — and it carries a reason in words plus
   // a button. Nothing here fires the update; main.ts does, and only when the pilot taps.
   const offerLine = offer == null ? ''
-    : `<div class="offer">${REASON_WORDS[offer.reason]}
-        <button data-act="update" data-id="${id}">update now</button>
+    : `<div class="offer">${esc(reasonText(offer.reason, t))}
+        <button data-act="update" data-id="${id}">${esc(t('shelf.updateNow'))}</button>
       </div>`;
   return `<div class="shelf-row${e.pinned ? ' pinned' : ''}">
     <span class="name">${esc(e.spec.name)}</span>
     <span class="day">${esc(e.spec.day)}</span>
-    ${chip(c)}
+    ${chip(c, t)}
     ${pin}
-    <button data-act="open" data-id="${id}">open</button>
+    <button data-act="open" data-id="${id}">${esc(t('shelf.open'))}</button>
     ${remove}
     ${offerLine}
   </div>`;
@@ -84,13 +81,14 @@ export function shelfHtml(
   shelf: Shelf,
   completenessById: ReadonlyMap<string, Completeness>,
   offers: readonly UpdateOffer[],
+  t: T,
 ): string {
   if (shelf.length === 0) {
-    return '<div class="shelf"><div class="shelf-empty">No packs yet — provision one above and it will be remembered</div></div>';
+    return `<div class="shelf"><div class="shelf-empty">${esc(t('shelf.empty'))}</div></div>`;
   }
   const offerById = new Map(offers.map(o => [o.id, o]));
   return `<div class="shelf">
-    ${shelf.map(e => rowHtml(e, completenessById.get(e.spec.id), offerById.get(e.spec.id))).join('')}
+    ${shelf.map(e => rowHtml(e, completenessById.get(e.spec.id), offerById.get(e.spec.id), t)).join('')}
   </div>`;
 }
 
@@ -116,20 +114,23 @@ export function cacheHtml(
   usedBytes: number | null,
   budgetMB: number,
   lastPlan: EvictionPlan | null,
+  t: T,
 ): string {
   const used = mb(usedBytes);
   const usage = `<div class="cache-usage${used == null ? ' unknown' : ''}">${
-    used == null ? '—' : `${used} MB`} of ${budgetMB} MB</div>`;
+    esc(t('cache.usage', { used: used == null ? '—' : `${used} MB`, budget: budgetMB }))}</div>`;
   let planLines = '';
   if (lastPlan != null) {
     const n = lastPlan.evict.length;
     planLines += n === 0
-      ? '<div class="evicted">last enforcement evicted nothing</div>'
-      : `<div class="evicted">last enforcement evicted ${n} tile${n === 1 ? '' : 's'} (${
-          mb(lastPlan.usedBytes - lastPlan.keptBytes) ?? '—'} MB)</div>`;
+      ? `<div class="evicted">${esc(t('cache.evictedNothing'))}</div>`
+      : `<div class="evicted">${esc(t('cache.evicted', {
+          n, mb: mb(lastPlan.usedBytes - lastPlan.keptBytes) ?? '—',
+        }))}</div>`;
     if (lastPlan.overBudget) {
-      planLines += `<div class="over-budget">pinned packs alone exceed the ceiling (${
-        mb(lastPlan.pinnedBytes) ?? '—'} MB pinned) — pinned packs are never evicted, so the ceiling cannot be met</div>`;
+      planLines += `<div class="over-budget">${esc(t('cache.overBudget', {
+        mb: mb(lastPlan.pinnedBytes) ?? '—',
+      }))}</div>`;
     }
   }
   return `<div class="cache">${usage}${planLines}</div>`;

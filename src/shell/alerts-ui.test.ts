@@ -1,7 +1,26 @@
 import { expect, test, describe } from 'bun:test';
-import { alertsHtml, trafficPanelHtml, clockOf, arrowOf } from './alerts-ui';
+import {
+  alertsHtml as alertsHtmlT, trafficPanelHtml as trafficPanelHtmlT,
+  clockOf as clockOfT, arrowOf,
+} from './alerts-ui';
 import { SEE_AND_AVOID, type AlarmLevel, type FlarmStatus, type Traffic } from '../core/flarm';
 import type { TerrainVerdict } from '../core/terrainalarm';
+import { translator } from '../core/i18n';
+import { PRESETS } from '../core/units';
+
+// IHM-006. The renderers now take a translator, and every claim below is unchanged: the sentences
+// moved into the catalogue, not out of the app. SEE_AND_AVOID is still imported from the KERNEL,
+// and i18n.test.ts asserts the English catalogue entry is character-for-character that constant —
+// so a test that reads the English rendering is still reading flarm.ts's own promise.
+const en = translator('en');
+const fr = translator('fr');
+// Metric unless a test says otherwise — the units the claims below were written in. CFG-003's own
+// claim (the banners follow the pilot's choice) is pinned separately, at the bottom of the file.
+const METRIC = PRESETS.metric;
+const alertsHtml = (x: Parameters<typeof alertsHtmlT>[0]): string => alertsHtmlT(x, METRIC, en);
+const trafficPanelHtml = (f: FlarmStatus | null, pic: readonly Traffic[]): string =>
+  trafficPanelHtmlT(f, pic, METRIC, en);
+const clockOf = (b: number | null): string | null => clockOfT(b, en);
 
 const CLEAR: TerrainVerdict = { kind: 'clear' };
 
@@ -78,8 +97,12 @@ describe('the FLARM banner (FLM-002, FLM-005)', () => {
 
   test('the height and distance are shown when the instrument has them', () => {
     const h = alertsHtml({ flarm: flarm({ relVertical: -40, relDistance: 800 }), terrain: CLEAR });
-    expect(h).toContain('-40 m');
-    expect(h).toContain('800 m');
+    // Both figures now come out of the units table (CFG-003), which is what lets them follow the
+    // pilot's choice instead of contradicting the boxes above them. A separation BELOW is a true
+    // minus (U+2212), the same glyph the divert margins and the task ribbon already use — one
+    // vocabulary for one fact — and the range is read in his distance unit.
+    expect(h).toContain('−40 m');
+    expect(h).toContain('0.8 km');
   });
 
   test('FLM-005: the see-and-avoid sentence ships with every alarm, verbatim', () => {
@@ -184,4 +207,57 @@ describe('the traffic panel beside the banner', () => {
     expect(p).toContain('—');
     expect(p).not.toContain('0 m');
   });
+});
+
+
+// ---- IHM-006: the same panel, in French ----
+
+describe('the alerts speak the pilot\'s language (IHM-006)', () => {
+  test('the see-and-avoid sentence is TRANSLATED, not merely reprinted in English', () => {
+    const f = flarm({ alarm: 3 });
+    const english = alertsHtmlT({ flarm: f, terrain: CLEAR }, METRIC, en);
+    const french = alertsHtmlT({ flarm: f, terrain: CLEAR }, METRIC, fr);
+    // The kernel's sentence is what the English renders; the French renders a real translation of
+    // it — and NOT the English one, which would be the failure mode a catalogue exists to prevent
+    // (a French pilot reading a warning he cannot parse is a pilot who does not heed it).
+    expect(english).toContain(SEE_AND_AVOID);
+    expect(french).toContain(fr('flarm.seeAndAvoid'));
+    expect(french).not.toContain(SEE_AND_AVOID);
+    expect(french).toContain('ALARME 3');
+  });
+
+  test('the unmeasured-ground note is French too — and still not an alarm', () => {
+    const v: TerrainVerdict = { kind: 'unmeasured', distanceM: 3400 };
+    const french = alertsHtmlT({ flarm: null, terrain: v }, METRIC, fr);
+    expect(french).toContain(fr('alert.groundAhead', { dist: '3.4 km' }));
+    expect(french).not.toContain('NOT loaded');
+    expect(french).not.toContain('alert');          // still a note, never a banner (TER-008)
+  });
+});
+
+
+// ---- CFG-003: the banners read in the unit the pilot chose ----
+
+test('the banners honour the pilot\'s units — the same quantity cannot read twice on one screen', () => {
+  // The failure this pins: the InfoBoxes a centimetre above the banner printed feet while the
+  // banner printed metres, because the banner had no idea a unit setting existed.
+  const AV = PRESETS.aviation;
+  const f = flarm({ relVertical: -40, relDistance: 1852 });
+  const h = alertsHtmlT({ flarm: f, terrain: CLEAR }, AV, en);
+  expect(h).toContain('−131 ft');                 // 40 m below, in the unit he flies
+  expect(h).toContain('1.0 NM');
+  expect(h).not.toContain('−40 m');
+  expect(h).not.toContain('0.8 km');
+
+  // The terrain note too — and its distance reaches the catalogue already formatted, so no
+  // kilometre survives in the sentence itself.
+  const note = alertsHtmlT(
+    { flarm: null, terrain: { kind: 'unmeasured', distanceM: 3704 } }, AV, en);
+  expect(note).toContain('2.0 NM');
+  expect(note).not.toContain('km');
+
+  // And the traffic rows, which are the same three facts in a list.
+  const rows = trafficPanelHtmlT(flarm({ alarm: 0 }), [other({ relVertical: 120 })], AV, en);
+  expect(rows).toContain('+394 ft');
+  expect(rows).not.toContain('+120 m');
 });

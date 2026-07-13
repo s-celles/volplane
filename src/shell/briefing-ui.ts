@@ -12,6 +12,8 @@
 
 import type { Completeness, CompletenessItem, PackClass } from '../core/pack';
 import type { Briefing, EmagramGeom, EmagramPt } from '../core/briefing';
+import { format, unitFor, type UnitPrefs } from '../core/units';
+import type { T } from './infobox-ui';
 
 // The same spelling of "unknown" main.ts uses: null in, null out, and NaN — which should never
 // reach the shell, but a screen is the wrong place to trust that — collapses to null too.
@@ -29,15 +31,15 @@ const esc = (s: string): string =>
 // app never measures the atmosphere, so EVERY briefing value gets one — the badge is attached
 // where the value is rendered, not sprinkled by the caller, so a value cannot slip past it.
 // A '—' carries no badge: an unknown claims nothing, so there is no claim to qualify.
-const BADGE =
-  '<span class="badge modelled" title="indicative, not validated — not a measurement">modelled</span>';
+const badge = (t: T): string =>
+  `<span class="badge modelled" title="${esc(t('badge.modelled.title'))}">${esc(t('badge.modelled'))}</span>`;
 
 // main.ts's box, extended with the badge on known values. Same classes (box/k/v/u/unknown) so
 // app.css styles both screens with one vocabulary.
-function box(k: string, v: string | null, u = ''): string {
+function box(k: string, v: string | null, u: string, t: T): string {
   return `<div class="box${v == null ? ' unknown' : ''}">
     <div class="k">${k}</div>
-    <div class="v">${v ?? '—'}<span class="u">${v == null ? '' : u}</span>${v == null ? '' : BADGE}</div>
+    <div class="v">${v ?? '—'}<span class="u">${v == null ? '' : u}</span>${v == null ? '' : badge(t)}</div>
   </div>`;
 }
 
@@ -57,23 +59,23 @@ const itemRow = (i: CompletenessItem): string =>
  *  warning, and a coloured dot is not one. Enrichment shortfalls keep their status row (that
  *  is their warning) but never poison the header: a stale forecast must not read as a grounded
  *  glider. */
-export function completenessHtml(c: Completeness): string {
+export function completenessHtml(c: Completeness, t: T): string {
   const gaps = c.items
     .filter(i => i.cls === 'flight' && i.status !== 'held')
     .map(i => `${i.kind} ${i.status}`)
     .join(', ');
   const header = c.ready
-    ? '<div class="pack-status ready">Pack is flight-ready</div>'
-    : `<div class="pack-status not-ready">Pack is NOT flight-ready — ${gaps}</div>`;
-  const section = (cls: PackClass, title: string): string =>
+    ? `<div class="pack-status ready">${esc(t('pack.ready'))}</div>`
+    : `<div class="pack-status not-ready">${esc(t('pack.notReady', { gaps }))}</div>`;
+  const section = (cls: PackClass, titleId: string): string =>
     `<section class="pack-class ${cls}">
-      <h3>${title}</h3>
+      <h3>${esc(t(titleId))}</h3>
       ${c.items.filter(i => i.cls === cls).map(itemRow).join('')}
     </section>`;
   return `<div class="completeness">
     ${header}
-    ${section('flight', 'Flight data — guaranteed offline')}
-    ${section('enrichment', 'Enrichment — optional')}
+    ${section('flight', 'pack.flight')}
+    ${section('enrichment', 'pack.enrichment')}
   </div>`;
 }
 
@@ -81,11 +83,11 @@ export function completenessHtml(c: Completeness): string {
 
 // A snapshot's age, in the units a pilot thinks in. Below the hour the rounding to whole hours
 // would say '0 h old' — a fake-zero cousin — so minutes take over there.
-const ageText = (ms: number): string => {
+const ageText = (ms: number, t: T): string => {
   const clamped = Math.max(0, ms);
   return clamped < 3_600_000
-    ? `${Math.round(clamped / 60_000)} min old`
-    : `${Math.round(clamped / 3_600_000)} h old`;
+    ? t('age.min', { n: Math.round(clamped / 60_000) })
+    : t('age.hours', { n: Math.round(clamped / 3_600_000) });
 };
 
 /** The connectivity badge. Offline is a legitimate state the whole app is built for
@@ -95,13 +97,14 @@ const ageText = (ms: number): string => {
  *  back to memory (store.ts could not open a durable KV), the badge says the one thing that
  *  matters about that: this cache dies with the app. */
 export function offlineBadgeHtml(
-  online: boolean, persistent: boolean, wxFetchedAt: number | null, now: number,
+  online: boolean, persistent: boolean, wxFetchedAt: number | null, now: number, t: T,
 ): string {
-  const age = wxFetchedAt == null ? null : ageText(now - wxFetchedAt);
+  const age = wxFetchedAt == null ? null : ageText(now - wxFetchedAt, t);
+  const state = esc(online ? t('net.online') : t('net.offline'));
   return `<div class="net ${online ? 'online' : 'offline'}">
-    <span class="state">${online ? 'online' : 'offline'}</span>
-    <span class="wx-age${age == null ? ' unknown' : ''}">weather: ${age ?? '—'}</span>
-    ${persistent ? '' : '<span class="volatile">cache is in memory only — it will not survive a restart</span>'}
+    <span class="state">${state}</span>
+    <span class="wx-age${age == null ? ' unknown' : ''}">${esc(t('net.weather'))}: ${age == null ? '—' : esc(age)}</span>
+    ${persistent ? '' : `<span class="volatile">${esc(t('net.volatile'))}</span>`}
   </div>`;
 }
 
@@ -109,8 +112,8 @@ export function offlineBadgeHtml(
 
 // A wind-table cell: number plus badge, or a dash. The badge rides in the CELL, not once per
 // table — POT-007 badges values, and a table row is three of them.
-const cell = (v: string | null): string =>
-  v == null ? '<td class="unknown">—</td>' : `<td>${v}${BADGE}</td>`;
+const cell = (v: string | null, t: T): string =>
+  v == null ? '<td class="unknown">—</td>' : `<td>${v}${badge(t)}</td>`;
 
 /** The briefing panel: cloudbase (WX-003), ceiling, stability, the day's convection summary
  *  and the wind ladder — speeds in km/h, directions FROM, the conventions a pilot reads.
@@ -118,26 +121,41 @@ const cell = (v: string | null): string =>
  *  source is 'sandbox' the panel wears the .sandbox class and a banner saying so in capitals —
  *  and because both come from the source field the value itself carries, a synthetic
  *  atmosphere CANNOT render unbadged (WX-005), whatever the caller forgot. */
-export function briefingHtml(b: Briefing): string {
+export function briefingHtml(b: Briefing, u: UnitPrefs, t: T): string {
   const sandbox = b.source === 'sandbox';
+  // CFG-003 reaches the briefing as well. The cloudbase used to be metres and the wind ladder km/h
+  // whatever the pilot had chosen — and a cloudbase is precisely the number he then compares with
+  // the altitude his InfoBoxes print in feet. Two units for one quantity, one screen apart.
+  const alt = (v: number | null | undefined): string | null => {
+    const f = format(v, 'altitude', u.altitude);
+    return f.unit === '' ? null : f.text;                 // '' is format's own spelling of unknown
+  };
+  const altUnit = unitFor('altitude', u.altitude);
   const sky = b.summary == null ? null
-    : `${Math.round(b.summary.depth)} m ${b.summary.isCu ? 'cumulus' : 'blue'}${b.summary.openTop ? ', open top' : ''}`;
+    : `${alt(b.summary.depth)} ${altUnit} ${esc(b.summary.isCu ? t('bf.cumulus') : t('bf.blue'))}${
+        b.summary.openTop ? `, ${esc(t('bf.openTop'))}` : ''}`;
+  const speed = (ms: number): string | null => {
+    const f = format(ms, 'speed', u.speed);
+    return f.unit === '' ? null : f.text;
+  };
   const wind = b.wind.length === 0
-    ? '<div class="box unknown"><div class="k">Wind profile</div><div class="v">—</div></div>'
+    ? `<div class="box unknown"><div class="k">${esc(t('bf.windProfile'))}</div><div class="v">—</div></div>`
     : `<table class="wind">
-        <thead><tr><th>alt (m)</th><th>speed (km/h)</th><th>from (°)</th></tr></thead>
+        <thead><tr><th>${esc(t('bf.wind.alt', { unit: altUnit }))}</th><th>${
+          esc(t('bf.wind.speed', { unit: unitFor('speed', u.speed) }))}</th><th>${
+          esc(t('bf.wind.from'))}</th></tr></thead>
         <tbody>${b.wind.map(r =>
-          `<tr>${cell(fmt(r.alt))}${cell(fmt(r.speed * 3.6))}${cell(fmt(r.dirFrom))}</tr>`).join('')}
+          `<tr>${cell(alt(r.alt), t)}${cell(speed(r.speed), t)}${cell(fmt(r.dirFrom), t)}</tr>`).join('')}
         </tbody>
       </table>`;
   return `<div class="briefing${sandbox ? ' sandbox' : ''}">
-    ${sandbox ? '<div class="sandbox-banner">SANDBOX — synthetic atmosphere</div>' : ''}
-    <h2>Briefing — ${b.hour}:00 UTC</h2>
+    ${sandbox ? `<div class="sandbox-banner">${esc(t('bf.sandboxBanner'))}</div>` : ''}
+    <h2>${esc(t('bf.title', { hour: b.hour }))}</h2>
     <div class="boxes">
-      ${box('Cloudbase', fmt(b.cloudbase), 'm')}
-      ${box('Ceiling', fmt(b.ceiling), 'm')}
-      ${box('Stability N', fmt(b.stability, 3), 's⁻¹')}
-      ${box('Convection', sky)}
+      ${box(esc(t('bf.cloudbase')), alt(b.cloudbase), altUnit, t)}
+      ${box(esc(t('bf.ceiling')), alt(b.ceiling), altUnit, t)}
+      ${box(esc(t('bf.stability')), fmt(b.stability, 3), 's⁻¹', t)}
+      ${box(esc(t('bf.convection')), sky, '', t)}
     </div>
     ${wind}
   </div>`;

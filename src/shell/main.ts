@@ -45,6 +45,13 @@ import {
   terrainAhead, terrainAlarm, DEFAULT_HORIZON_S, type TerrainVerdict,
 } from '../core/terrainalarm';
 import { alertsHtml, trafficPanelHtml } from './alerts-ui';
+import { translator } from '../core/i18n';
+import { boxHtml, boxesHtml, pageTabsHtml } from './infobox-ui';
+import { settingsHtml, commits } from './settings-ui';
+import { editPages, type BoxSource, type PageEdit } from '../core/infobox';
+import { GLIDER_LIBRARY } from '../core/polarlib';
+import { PRESETS, formatText, type Quantity, type UnitSystem } from '../core/units';
+import { isLang } from '../core/i18n';
 import { roseSvg } from './rose-ui';
 import { barograph, effectiveGlide, climbs } from '../core/analysis';
 import { freeDistance, faiTriangle } from '../core/optimise';
@@ -53,7 +60,7 @@ import { xsectionSvg } from './xsection-ui';
 import { paintMap as paintMovingMap, type MapPaint2D } from './map-ui';
 import type { View as MapView } from './liftmap-ui';
 import { completeness, specFor, type Completeness, type PackSpec, type Held } from '../core/pack';
-import { normalizeSettings, activePolar, fieldNumber, type Settings } from '../core/config';
+import { normalizeSettings, activePolar, fieldNumber, massKgFromField, type Settings } from '../core/config';
 import { upsertPack, touchPack, setPinned, removePack, sortedShelf, updateOffers, type Shelf } from '../core/shelf';
 import type { EvictionPlan } from '../core/cachebudget';
 import { briefingAt, sandboxWx, type Provenance } from '../core/briefing';
@@ -99,6 +106,12 @@ const kv = await openStore('volplane');
 // holds a shape the normalizer already blessed.
 let shelf: Shelf = await loadShelf(kv);
 let settings: Settings = await loadSettings(kv);
+
+// IHM-006: the ONE translator, derived from the ONE setting, re-derived the instant that setting
+// changes (applySettings, below) and handed to every renderer as its last argument. A renderer
+// that reached for a language of its own would be a renderer no test could pin to a catalogue —
+// and a second binding here would be a second language, on the same screen, at the same time.
+let t = translator(settings.lang);
 
 // The DEM, read disk-first and network-second (OFF-004): over ground this machine has visited
 // — or been provisioned for — the radio is never consulted, so the Fly screen survives a
@@ -150,13 +163,15 @@ function onFlyTiles(): void {
 const root = document.getElementById('app')!;
 root.innerHTML = `
   <nav class="tabs">
-    <button id="tab-fly" class="active" type="button">Fly</button>
-    <button id="tab-briefing" type="button">Briefing</button>
-    <button id="tab-analysis" type="button">Analysis</button>
+    <button id="tab-fly" class="active" type="button"></button>
+    <button id="tab-briefing" type="button"></button>
+    <button id="tab-analysis" type="button"></button>
+    <button id="tab-settings" type="button"></button>
   </nav>
   <div id="fly"></div>
   <div id="briefing" hidden></div>
   <div id="analysis" hidden></div>
+  <div id="settings" hidden></div>
 `;
 const app = root.querySelector<HTMLElement>('#fly')!;
 const bf = root.querySelector<HTMLElement>('#briefing')!;
@@ -175,34 +190,44 @@ const platform: Platform =
 const offered = offerableLinks(platform).filter(l => l !== 'replay');   // replay has its own file input
 const notYet = missingLinks(platform);
 
+// IHM-006, and the hole it had. Every word below is a catalogue id, not an English string: the
+// strip is emitted ONCE (a 1 Hz render would eat the caret mid-QNH) and its words are painted into
+// it afterwards by renderFlyChrome(), which applySettings calls on every language change. Before
+// this, 'record', 'audio off', 'no goal' and the landable filter's four category names were
+// interpolated at module load and never touched again — a pilot who switched to French got a
+// half-French screen, and the half that stayed English was the half he presses in flight.
+//
+// data-i18n on an EMPTY span, filled at paint time. A label spelt into the markup here would be a
+// label the catalogue cannot reach, and the one thing worse than an untranslated label is one that
+// looks translated because the tab above it is.
 app.innerHTML = `
   <h1>VOLPLANE</h1>
   <div id="fly-view"></div>
   <form id="fly-set" class="fly-set">
-    <label>MC <input id="set-mc" size="3" value="1.0" inputmode="decimal" /> m/s</label>
-    <label>QNH <input id="set-qnh" size="5" value="1013.25" inputmode="decimal" /> hPa</label>
-    <label>reserve <input id="set-reserve" size="4" value="200" inputmode="numeric" /> m</label>
-    <label title="TER-008: how far AHEAD the terrain alarm looks, in seconds — time is what the pilot can act on, metres are not">terrain horizon
+    <label><span data-i18n="fly.mc"></span> <input id="set-mc" size="3" value="1.0" inputmode="decimal" /> m/s</label>
+    <label><span data-i18n="fly.qnh"></span> <input id="set-qnh" size="5" value="1013.25" inputmode="decimal" /> hPa</label>
+    <label><span data-i18n="fly.reserve"></span> <input id="set-reserve" size="4" value="200" inputmode="numeric" /> m</label>
+    <label data-i18n-title="fly.horizon.title"><span data-i18n="fly.horizon"></span>
       <input id="set-horizon" size="3" value="60" inputmode="numeric" /> s</label>
-    <button id="set-goal" type="button" title="make the current position and ground the final-glide goal">goal: here</button>
-    <span id="goal-label" class="goal-label">no goal</span>
-    <button id="rec" type="button" title="record the flight as an IGC file (LOG)">● record</button>
-    <label class="replay">airspace (OpenAir) <input id="oa" type="file" accept=".txt,.openair" /></label>
+    <button id="set-goal" type="button" data-i18n="fly.goalHere" data-i18n-title="fly.goalHere.title"></button>
+    <span id="goal-label" class="goal-label"></span>
+    <button id="rec" type="button" data-i18n-title="fly.record.title"></button>
+    <label class="replay"><span data-i18n="fly.airspaceFile"></span> <input id="oa" type="file" accept=".txt,.openair" /></label>
     <span id="oa-label" class="goal-label"></span>
-    <label class="replay" title="TSK: waypoints as 'name,lon,lat[,aat]' lines — start first, finish last, fai-2024 sectors; 'aat' marks an assigned area">task (CSV)
+    <label class="replay" data-i18n-title="fly.taskFile.title"><span data-i18n="fly.taskFile"></span>
       <input id="tsk" type="file" accept=".csv,.txt" /></label>
     <span id="tsk-label" class="goal-label"></span>
-    <label class="replay" title="TSK-007/TSK-006: the organisers' task time — the minimum time on an AAT, the target time on a racing task. The REQUIRED speed is priced against it, on any task. Left empty it is UNKNOWN, not zero, and those figures read as dashes: the app admitting nobody told it.">task time
+    <label class="replay" data-i18n-title="fly.taskTime.title"><span data-i18n="fly.taskTime"></span>
       <input id="set-mintime" size="4" value="" inputmode="numeric" /> min</label>
-    <label class="replay" title="PLA-010: your glider's polar, as a WinPilot .plr file">polar (.plr)
+    <label class="replay" data-i18n-title="fly.polarFile.title"><span data-i18n="fly.polarFile"></span>
       <input id="plr" type="file" accept=".plr,.txt" /></label>
     <span id="plr-label" class="polar-label"></span>
-    <button id="plr-default" type="button" title="forget the imported polar and fly the built-in default">default</button>
-    <label class="replay" title="CFG-007: SeeYou waypoints — the landable fields">landables (.cup)
+    <button id="plr-default" type="button" data-i18n="fly.polarDefaultBtn" data-i18n-title="fly.polarDefaultBtn.title"></button>
+    <label class="replay" data-i18n-title="fly.landablesFile.title"><span data-i18n="fly.landablesFile"></span>
       <input id="cup" type="file" accept=".cup,.txt" /></label>
     <span id="cup-label" class="goal-label"></span>
-    ${styleFilterHtml(null)}
-    <label class="replay" title="ESP-004: airspace classes that ALERT, comma-separated — empty means all; the map always draws everything">alert classes
+    <div id="lnd-filter-slot"></div>
+    <label class="replay" data-i18n-title="fly.alertClasses.title"><span data-i18n="fly.alertClasses"></span>
       <input id="set-classes" size="10" placeholder="all" /></label>
   </form>
   <div class="canvas-frame map-frame">
@@ -215,8 +240,8 @@ app.innerHTML = `
   <div id="xsection" class="xsection-frame"></div>
   <div id="rose" class="rose-frame"></div>
   <form id="audio-set" class="fly-set">
-    <button id="audio-on" type="button" title="VAR-004: the vario, out loud. Browsers only allow sound after a click — this is that click.">🔇 audio off</button>
-    <label><input id="audio-stf" type="checkbox" /> speed-to-fly mode (VAR-005)</label>
+    <button id="audio-on" type="button" data-i18n-title="fly.audio.title"></button>
+    <label><input id="audio-stf" type="checkbox" /> <span data-i18n="fly.stfMode"></span></label>
   </form>
   <form id="connect">
     <select id="linksel">${offered.map(l => `<option value="${l}">${l.toUpperCase()}</option>`).join('')}</select>
@@ -240,15 +265,6 @@ const hostIn = app.querySelector<HTMLInputElement>('#host')!;
 // UDP listens; it has no host to ask for. The field follows the selected link.
 linkSel.onchange = () => { hostIn.hidden = linkSel.value === 'udp'; };
 
-const fmt = (v: number | null | undefined, digits = 0) =>
-  v == null || !Number.isFinite(v) ? null : v.toFixed(digits);
-
-function box(k: string, v: string | null, u = '', badge = ''): string {
-  return `<div class="box${v == null ? ' unknown' : ''}">
-    <div class="k">${k}${badge}</div>
-    <div class="v">${v ?? '—'}<span class="u">${v == null ? '' : u}</span></div>
-  </div>`;
-}
 
 // ---- the flight computer's own state (Phase 2) ----
 
@@ -256,6 +272,23 @@ function box(k: string, v: string | null, u = '', badge = ''): string {
 // one that is — every glide call below reads this binding, so importing a .plr swaps the
 // whole computer's polar in one assignment.
 let polar: Polar = activePolar(settings);
+
+/** THE one write path for every setting on this screen (CFG-005, OFF-002). Nothing else assigns
+ *  to `settings`, and that is the whole discipline: the normalizer is the gatekeeper, the disk
+ *  only ever holds a shape it has blessed, and everything DERIVED from a setting is re-derived
+ *  here — the translator (a language change must reach the very sentence that announced it), the
+ *  polar (a glider change must reach the final glide before the next fix does), and every screen
+ *  that shows either. A patch that skipped one of them would leave the app half-changed, which is
+ *  worse than not changing at all: the pilot would have to guess which half he is flying. */
+function applySettings(patch: Partial<Settings>): void {
+  settings = normalizeSettings({ ...settings, ...patch });
+  void saveSettings(kv, settings);
+  t = translator(settings.lang);
+  polar = activePolar(settings);
+  renderChrome();
+  renderSettings();
+  render(state, link);
+}
 // Everything below is PER-FLIGHT memory, and it is `let` for one reason: a new source is a new
 // flight, and these must be thrown away with the old one (see resetFlight). They used to be
 // const — created once at module load and never cleared — which meant that after replaying an
@@ -292,7 +325,7 @@ let orphanFixes = 0;                               // what letting it go would c
  *  wrong way round. Answers true when there is nothing left to lose. */
 async function releaseOrphan(): Promise<boolean> {
   if (!orphanBanner) return true;
-  if (!confirm(`Discard the recovered flight (${orphanFixes} fixes)? It exists nowhere else.`)) return false;
+  if (!confirm(t('orphan.confirm', { fixes: orphanFixes }))) return false;
   await clearJournal(kv);
   orphanBanner.remove();
   orphanBanner = null;
@@ -385,11 +418,6 @@ function minTaskTimeS(): number | null {
   return Number.isFinite(min) && min > 0 ? min * 60 : null;
 }
 
-/** The ESTIMATED badge (VEN-001). Same loud honesty as the briefing's MODELLED: this wind is
- *  our inference from circle drift, not the instrument's measurement, and the two must never
- *  wear the same label. */
-const EST_BADGE = ' <span class="badge estimated" title="from circle drift — an estimate, not the instrument">est</span>';
-
 /** ESP: the verdicts for now. 'inside' and 'predicted' never share a colour (ESP-003), and a
  *  worst-cased vertical says so in words (ESP-005). The verdicts are computed over ALL
  *  spaces, always — the class filter and the pilot's acknowledgements (ESP-004) mute the
@@ -422,7 +450,7 @@ function taskHtml(s: NavState): string {
                 s.fix ? { lon: s.fix.lon, lat: s.fix.lat, sod: s.fix.sod } : null,
                 { minTaskTimeS: minTaskTimeS() })
     : null;
-  return taskRibbonHtml(task, taskProgress, aat, stats);
+  return taskRibbonHtml(task, taskProgress, aat, stats, settings.units, t);
 }
 
 /** CAR + TER-005: repaint the canvas from the current state. Called from render, cheap at
@@ -466,7 +494,10 @@ function repaintMap(s: NavState, stale: boolean): void {
     landableScope: altScope,
     // SYS-002: the rings age with the link, exactly as the boxes do.
     stale,
-  });
+    // CFG-003: the two numbers this canvas prints — the judging radius and a named peak — are read
+    // in the pilot's units, like every other number on this screen.
+    units: settings.units,
+  }, t);
 
   // ANA-002: the slice straight ahead — the dimension the plan view flattens away.
   const xs = app.querySelector<HTMLElement>('#xsection');
@@ -474,7 +505,7 @@ function repaintMap(s: NavState, stale: boolean): void {
     xs.innerHTML = xsectionSvg({
       lon: s.fix.lon, lat: s.fix.lat, bearing: s.track, altM: s.fix.alt,
       rangeM: Math.min(mapWidthM, 30_000), glideRatio: ld, elev, spaces,
-    });
+    }, t);
   } else if (xs) {
     xs.innerHTML = '';                      // no track, no slice: nothing to draw ahead of
   }
@@ -504,6 +535,41 @@ function computeAlternates(s: NavState): Alternate[] {
   });
 }
 
+/** IHM-001, the whole point of the registry: everything a box may read, gathered ONCE per render
+ *  out of what render() has already computed, in SI, with a null wherever nobody measured
+ *  anything (POT-007). No getter downstream computes; they project. This is the only place the
+ *  Fly screen's numbers and the pilot's chosen boxes meet, and it is a plain record — which is
+ *  why moving a box is a click and no longer an edit to this file. */
+function boxSource(
+  s: NavState, d: ReturnType<typeof derive>, mc: number, stf: number,
+  estWind: { direction: number; speed: number } | null,
+  arr: ReturnType<typeof arrival>,
+): BoxSource {
+  return {
+    latDeg: s.fix?.lat ?? null,
+    lonDeg: s.fix?.lon ?? null,
+    altM: s.fix?.alt ?? null,
+    qnhAltM: d.qnhAlt,
+    groundElevM: s.groundElev,
+    aglM: s.agl,
+    varioMs: s.vario ?? null,
+    avg30Ms: avgVario.average(),
+    lastThermalMs: circles.lastThermal()?.avgMs ?? null,
+    lastCircleMs: circles.lastCircle()?.avgMs ?? null,
+    nettoMs: d.netto,
+    superNettoMs: d.superNetto,
+    tasMs: d.tas,
+    groundSpeedMs: s.groundSpeed ?? null,
+    stfMs: stf,
+    windDirDeg: estWind?.direction ?? null,
+    windSpeedMs: estWind?.speed ?? null,
+    instWindDirDeg: s.reportedWind?.direction ?? null,
+    instWindSpeedMs: s.reportedWind?.speed ?? null,
+    arrivalM: arr?.height ?? null,
+    mcMs: mc,
+  };
+}
+
 function render(s: NavState, link: LinkState): void {
   const mc = setting('#set-mc', 1);
   const qnh = setting('#set-qnh', 1013.25, 1);
@@ -520,7 +586,7 @@ function render(s: NavState, link: LinkState): void {
     const dist = distM(s.fix.lon, s.fix.lat, goal.lon, goal.lat);
     const brg = bearingDeg(s.fix.lon, s.fix.lat, goal.lon, goal.lat);
     const w = estWind ?? s.reportedWind ?? null;
-    windUsed = w === estWind && estWind ? 'estimated wind' : w ? 'instrument wind' : 'no wind';
+    windUsed = w === estWind && estWind ? t('fly.windEstimated') : w ? t('fly.windInstrument') : t('fly.windNone');
     const head = w ? w.speed * Math.cos((w.direction - brg) * Math.PI / 180) : 0;
     arr = arrival(polar, mc, s.fix.alt, dist, goal.elev, head, reserve);
   }
@@ -544,31 +610,18 @@ function render(s: NavState, link: LinkState): void {
   altScope = cup.length && s.fix
     ? { radiusM: DEFAULT_RADIUS_M, judged: alts.length, inRadius }
     : null;
+  // IHM-001/002: seventeen hard-coded boxes became a PAGE — the pilot's page, in the pilot's
+  // order, in the pilot's units, out of the registry. The goal's arrival box is no longer a
+  // conditional line of markup: it is a box like any other, and it dashes out when there is no
+  // goal, because an arrival height without a goal is not a zero, it is a question nobody asked.
+  const page = settings.pages.find(p => p.id === settings.activePageId) ?? settings.pages[0]!;
+  const src = boxSource(s, d, mc, stf, estWind, arr);
   flyView.innerHTML = `
-    <div class="boxes${stale ? ' stale' : ''}">
-      ${box('Latitude', fmt(s.fix?.lat, 5), '°')}
-      ${box('Longitude', fmt(s.fix?.lon, 5), '°')}
-      ${box('Altitude', fmt(s.fix?.alt), 'm')}
-      ${box('Alt QNH', fmt(d.qnhAlt), 'm')}
-      ${box('Ground', fmt(s.groundElev), 'm')}
-      ${box('Height AGL', fmt(s.agl), 'm')}
-      ${box('Vario', fmt(s.vario, 1), 'm/s')}
-      ${box('Avg 30 s', fmt(avgVario.average(), 1), 'm/s')}
-      ${box('Last thermal', fmt(circles.lastThermal()?.avgMs ?? null, 1), 'm/s')}
-      ${box('Last circle', fmt(circles.lastCircle()?.avgMs ?? null, 1), 'm/s')}
-      ${box('Netto', fmt(d.netto, 1), 'm/s')}
-      ${box('TAS', fmt(d.tas && d.tas * 3.6), 'km/h')}
-      ${box('Ground speed', fmt(s.groundSpeed && s.groundSpeed * 3.6), 'km/h')}
-      ${box('Speed to fly', fmt(stf * 3.6), 'km/h')}
-      ${box('Wind (instrument)', s.reportedWind ? `${s.reportedWind.direction.toFixed(0)}°` : null,
-            s.reportedWind ? `/ ${(s.reportedWind.speed * 3.6).toFixed(0)} km/h` : '')}
-      ${box('Wind', estWind ? `${estWind.direction.toFixed(0)}°` : null,
-            estWind ? `/ ${(estWind.speed * 3.6).toFixed(0)} km/h` : '', EST_BADGE)}
-      ${goal ? box(`Arrival <span class="goal-hint" title="${windUsed}">▸ goal</span>`,
-                   fmt(arr && arr.height), 'm') : ''}
-    </div>
-    ${alertsHtml({ flarm: fl, terrain: verdict })}
-    ${trafficPanelHtml(fl, traffic.picture(s.fix?.sod ?? 0))}
+    ${pageTabsHtml(settings.pages, settings.activePageId, t)}
+    ${boxesHtml(page, src, settings.units, t, { stale })}
+    ${goal ? `<div class="goal-hint" title="${windUsed}">${t('fly.goalBox')} — ${windUsed}</div>` : ''}
+    ${alertsHtml({ flarm: fl, terrain: verdict }, settings.units, t)}
+    ${trafficPanelHtml(fl, traffic.picture(s.fix?.sod ?? 0), settings.units, t)}
     ${airspaceHtml(s)}
     ${taskHtml(s)}
     <div id="alternates">${alternatesHtml({
@@ -580,17 +633,17 @@ function render(s: NavState, link: LinkState): void {
       judged: alts,                 // the banner speaks for THIS, never for the filtered rows
       rows: visibleAlts(alts),
       stale,
-    })}</div>
-    <div class="link ${link.state}">Link: ${link.state}${
+    }, settings.units, t)}</div>
+    <div class="link ${link.state}">${t('fly.link', { state: link.state })}${
       link.state === 'closed' && link.error ? ` — ${link.error}` : ''
-    }${stale ? ' — values are the LAST RECEIVED, not current' : ''}${
-      journal?.lastError ? ` — journal writes failing (${journal.lastError}): a crash now loses the whole flight` : ''}</div>
+    }${stale ? ` — ${t('link.stale')}` : ''}${
+      journal?.lastError ? ` — ${t('fly.journalFailing', { error: journal.lastError })}` : ''}</div>
   `;
   // THE-001/002: the rose lives OUTSIDE #fly-view, beside the cross-section, because it is a
   // picture of the air and not a row of numbers. No branch here on "is he circling": a null rose
   // draws its own refusal ("not circling — no rose"), which is the honest thing to say and the
   // only thing this shell would have said anyway.
-  roseEl.innerHTML = roseSvg(rose.rose(s.fix?.sod ?? 0));
+  roseEl.innerHTML = roseSvg(rose.rose(s.fix?.sod ?? 0), t);
   repaintMap(s, stale);
 }
 
@@ -614,12 +667,13 @@ function render(s: NavState, link: LinkState): void {
   // means no goal — a final glide to an invented elevation is exactly the number PLA-004
   // must never show.
   if (!state.fix || state.groundElev == null) {
-    (app.querySelector('#goal-label') as HTMLElement).textContent = 'no goal — need a fix over known ground';
+    (app.querySelector('#goal-label') as HTMLElement).textContent = t('fly.noGoalNeedFix');
     return;
   }
   goal = { lon: state.fix.lon, lat: state.fix.lat, elev: state.groundElev };
-  (app.querySelector('#goal-label') as HTMLElement).textContent =
-    `goal ${goal.lat.toFixed(3)}, ${goal.lon.toFixed(3)} @ ${goal.elev.toFixed(0)} m`;
+  // renderFlyChrome derives the label from `goal` itself, in the pilot's language and his altitude
+  // unit — one sentence, one place, and a language change repaints it.
+  renderFlyChrome();
   render(state, link);
 };
 /** CFG-007 / LND-001: adopt a SeeYou .cup — the pilot's own list of fields, which is the only
@@ -647,8 +701,7 @@ function adoptCup(text: string): string | null {
   if (!f) return;
   const text = await f.text();
   const label = adoptCup(text);
-  (app.querySelector('#cup-label') as HTMLElement).textContent =
-    label ?? 'no waypoints the parser could read — keeping the current landables';
+  (app.querySelector('#cup-label') as HTMLElement).textContent = label ?? t('fly.cupRefused');
   // OFF-002, and the same refusal discipline as the task: a file that yielded nothing is not a
   // database of fields, and it must not come back next launch posing as one.
   if (label) void saveFlightFile(kv, 'landables', { name: f.name, text });
@@ -676,7 +729,17 @@ app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => {
 // indexed: between the paint and the tap the row order may have changed, but the key still
 // names the volume the pilot read.
 flyView.onclick = e => {
-  const btn = (e.target as HTMLElement).closest('button[data-ack]') as HTMLButtonElement | null;
+  const el = e.target as HTMLElement;
+  // IHM-002: the page tabs repaint at 1 Hz under this listener, exactly as the alert rows do —
+  // which is precisely why the listener is on the container and not on the buttons. The chosen
+  // page is a SETTING (CFG-005): it goes through the normalizer and onto the disk, so the pilot
+  // who was on 'final glide' when the battery died comes back to 'final glide'.
+  const tab = el.closest('button[data-page]') as HTMLButtonElement | null;
+  if (tab?.dataset.page) {
+    applySettings({ activePageId: tab.dataset.page });
+    return;
+  }
+  const btn = el.closest('button[data-ack]') as HTMLButtonElement | null;
   if (!btn || !state.fix) return;
   const space = spaces.find(sp => ackKey(sp) === btn.dataset.ack);
   if (!space) return;                     // a click racing a file reload: nothing left to ack
@@ -695,7 +758,7 @@ flyView.onclick = e => {
     // The logger records; the journal insures it (SYS-001): every few seconds the drained
     // records land in the KV, so a crash costs at most one buffer, not the flight.
     logger = igcLogger({ day });
-    btn.textContent = '■ stop & save';
+    btn.textContent = t('fly.stopSave');
     journal = await openJournal(kv, { day });
     return;
   }
@@ -706,7 +769,7 @@ flyView.onclick = e => {
   const lg = logger, j = journal;
   logger = null;
   journal = null;
-  btn.textContent = '● record';
+  btn.textContent = t('fly.record');
   if (j) await j.flush();
   const igc = lg.file();
   const n = lg.count();
@@ -716,7 +779,7 @@ flyView.onclick = e => {
   a.click();
   URL.revokeObjectURL(a.href);
   if (j) await j.discard();
-  (app.querySelector('#oa-label') as HTMLElement).textContent = `saved ${n} fixes`;
+  (app.querySelector('#oa-label') as HTMLElement).textContent = t('fly.savedFixes', { n });
 };
 /** TSK: adopt a task from CSV text — one waypoint per line, "name,lon,lat" with an optional
  *  fourth field "aat" marking that point an assigned area (TSK-003). Lines that fail to
@@ -769,8 +832,7 @@ function adoptTask(text: string): string | null {
   if (!f) return;
   const text = await f.text();
   const label = adoptTask(text);
-  (app.querySelector('#tsk-label') as HTMLElement).textContent =
-    label ?? 'a task needs at least a start and a finish';
+  (app.querySelector('#tsk-label') as HTMLElement).textContent = label ?? t('fly.taskRefused');
   // OFF-002: the task survives the restart — saved as the RAW text, and only once adopted:
   // a file refused above is not a task, and must not come back next launch as one.
   if (label) void saveFlightFile(kv, 'task', { name: f.name, text });
@@ -779,8 +841,12 @@ function adoptTask(text: string): string | null {
 // PLA-010: the name of the polar that FLIES, as words the pilot can check against his
 // glider. The default is named as the default — an imported polar and the built-in one must
 // never be mistaken for each other.
-const polarName = (): string =>
-  settings.polar ? settings.polar.name : `${DEFAULT_POLAR.name} (default)`;
+const polarName = (): string => {
+  if (settings.polar) return settings.polar.name;
+  const lib = settings.glider ? GLIDER_LIBRARY.find(g => g.id === settings.glider!.libId) : undefined;
+  if (lib) return lib.name;
+  return t('fly.polarDefault', { name: DEFAULT_POLAR.name });
+};
 const plrLabel = app.querySelector('#plr-label') as HTMLElement;
 (app.querySelector('#plr') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
@@ -789,21 +855,19 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
   // what the parser refuses — a second parse opinion here could only ever disagree with it.
   const next = normalizeSettings({ ...settings, polar: { name: f.name, plr: await f.text() } });
   if (next.polar === null) {
-    plrLabel.textContent = `not a .plr the parser accepts — keeping ${polarName()}`;
+    plrLabel.textContent = t('fly.plrRefused', { name: polarName() });
     return;
   }
-  settings = next;
-  polar = activePolar(settings);
-  void saveSettings(kv, settings);
+  // CFG-007 outranks CFG-002, and the panel must not be able to say otherwise: the pilot handed
+  // us the file for HIS glider, so the library pick is CLEARED rather than left standing under an
+  // import that already outranks it (activePolar's priority). A Discus showing as selected while
+  // an imported ASK 21 .plr quietly flies the final glide is the exact lie this clears.
+  applySettings({ polar: next.polar, glider: null });
   plrLabel.textContent = polarName();
-  render(state, link);
 };
 (app.querySelector('#plr-default') as HTMLButtonElement).onclick = () => {
-  settings = normalizeSettings({ ...settings, polar: null });
-  polar = activePolar(settings);
-  void saveSettings(kv, settings);
+  applySettings({ polar: null });
   plrLabel.textContent = polarName();
-  render(state, link);
 };
 // ESP-004: which classes ALERT. Committed onchange, not per keystroke — a half-typed list
 // must not mute anything — and echoed back normalized (trimmed, uppercase, deduped), so the
@@ -812,12 +876,8 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
 (app.querySelector('#set-classes') as HTMLInputElement).onchange = e => {
   const el = e.target as HTMLInputElement;
   const raw = el.value.trim();
-  settings = normalizeSettings({
-    ...settings, monitoredClasses: raw === '' ? null : raw.split(','),
-  });
-  void saveSettings(kv, settings);
+  applySettings({ monitoredClasses: raw === '' ? null : raw.split(',') });
   el.value = settings.monitoredClasses?.join(', ') ?? '';
-  render(state, link);
 };
 // VAR-004: the browser refuses sound before a gesture, and that refusal is not a bug to work
 // around — this button IS the gesture. A platform with no audio out says so (the spec's own
@@ -827,11 +887,11 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
   if (audio?.running) {
     audio.stop();
     audio = null;
-    btn.textContent = '🔇 audio off';
+    btn.textContent = t('fly.audioOff');
     return;
   }
   audio = openAudio();
-  btn.textContent = audio ? '🔊 audio on' : 'no audio output on this platform';
+  btn.textContent = audio ? t('fly.audioOn') : t('fly.audioNone');
 };
 (app.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => { mapWidthM = Math.max(2000, mapWidthM / 1.5); render(state, link); };
 (app.querySelector('#zoom-out') as HTMLButtonElement).onclick = () => { mapWidthM = Math.min(200_000, mapWidthM * 1.5); render(state, link); };
@@ -846,10 +906,14 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
 function adoptAirspace(text: string): { adopted: boolean; label: string } {
   const { spaces: loaded, refused } = parseOpenAir(text);
   if (loaded.length === 0) {
-    return { adopted: false, label: `0 volumes parsed (${refused} refused) — file rejected, keeping the current airspace` };
+    return { adopted: false, label: t('fly.airspaceRefused', { refused }) };
   }
   spaces = loaded;
-  return { adopted: true, label: `${loaded.length} volumes loaded${refused ? `, ${refused} refused` : ''}` };
+  return {
+    adopted: true,
+    label: t('fly.airspaceLoaded', { n: loaded.length })
+      + (refused ? t('fly.airspaceRefusedSome', { n: refused }) : ''),
+  };
 }
 (app.querySelector('#oa') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
@@ -927,8 +991,8 @@ async function run(dev: Device): Promise<void> {
         const st = parsePflau(line, state.fix?.sod ?? 0);
         if (st) flarm = st;
       } else if (line.startsWith('$PFLAA')) {
-        const t = parsePflaa(line, state.fix?.sod ?? 0);
-        if (t) traffic.add(t);
+        const tr = parsePflaa(line, state.fix?.sod ?? 0);
+        if (tr) traffic.add(tr);
       }
       yield line;
     }
@@ -1192,7 +1256,7 @@ function paintMap(): void {
   mixerEl.innerHTML = mixerSvg(bfOn, bfMix, MIXER_SIZE);
   // The map rides along so the legend can say WHY a layer is quiet: unknown terrain, no
   // driver, or genuinely nothing — three facts one empty canvas cannot distinguish (POT-007).
-  legendEl.innerHTML = legendHtml(bfOn, bfMap);
+  legendEl.innerHTML = legendHtml(bfOn, t, bfMap);
 }
 
 /** Re-brief the hour from the weather already in hand: panel, emagram, lift map. The hour
@@ -1200,7 +1264,7 @@ function paintMap(): void {
  *  follows the slider live. */
 function renderDay(): void {
   const b = briefingAt(bfWx, bfHour, bfSource);
-  briefingEl.innerHTML = briefingHtml(b);
+  briefingEl.innerHTML = briefingHtml(b, settings.units, t);
   emagramEl.innerHTML = emagramSvg(b.sounding, 460, 300);
   bfMap = bfSpec
     ? computeLiftMap(centreOf(bfSpec), radiusMOf(bfSpec), elev, bfWx, bfHour, dayMsOf(bfSpec), bfCal)
@@ -1212,7 +1276,7 @@ function renderDay(): void {
  *  memory — the warning that this cache dies with the app. */
 function renderNet(): void {
   netEl.innerHTML = offlineBadgeHtml(
-    navigator.onLine, isPersistent(kv), bfHeld?.weather?.fetchedAt ?? null, Date.now());
+    navigator.onLine, isPersistent(kv), bfHeld?.weather?.fetchedAt ?? null, Date.now(), t);
 }
 
 /** The cache ceiling as typed, normalized by core's own rule (OFF-002/006): an unparsable
@@ -1228,8 +1292,8 @@ async function persistShelf(): Promise<void> {
   try {
     await saveShelf(kv, shelf);
   } catch (e) {
-    cacheEl.innerHTML = `<div class="cache"><div class="over-budget">shelf could not be saved — ${
-      String(e)} — pins and packs shown here will NOT survive a restart</div></div>`;
+    cacheEl.innerHTML = `<div class="cache"><div class="over-budget">${
+      t('cache.saveFailed', { error: String(e) })}</div></div>`;
   }
   await refreshShelf();
 }
@@ -1253,13 +1317,14 @@ async function refreshShelf(): Promise<void> {
     for (const e of snap)
       completenessById.set(e.spec.id, completeness(e.spec, heldById.get(e.spec.id)!, Z, now));
     const offers = navigator.onLine ? updateOffers(snap, heldById, Z, now) : [];
-    shelfEl.innerHTML = shelfHtml(sortedShelf(snap), completenessById, offers);
-    cacheEl.innerHTML = cacheHtml(inv.reduce((sum, e) => sum + e.bytes, 0), budgetMB(), lastPlan);
+    shelfEl.innerHTML = shelfHtml(sortedShelf(snap), completenessById, offers, t);
+    cacheEl.innerHTML = cacheHtml(inv.reduce((sum, e) => sum + e.bytes, 0), budgetMB(), lastPlan, t);
   } catch (e) {
     if (epoch !== shelfEpoch) return;
     // A failed re-measurement must not leave yesterday's panel posing as fresh (OFF-010's
     // promise is the MEASUREMENT, not the pixels): say the measurement failed, in place.
-    shelfEl.innerHTML = `<div class="shelf"><div class="shelf-empty">shelf could not be re-measured — ${String(e)}</div></div>`;
+    shelfEl.innerHTML = `<div class="shelf"><div class="shelf-empty">${
+      t('shelf.remeasureFailed', { error: String(e) })}</div></div>`;
     cacheEl.innerHTML = '';
   }
 }
@@ -1282,13 +1347,14 @@ function renderRepo(): void {
     new Map(Object.entries(repoHeld)),
     e => freshness(repoHeld[e.id] ?? null, Date.now()),
     navigator.onLine,
+    t,
   );
 }
 
 /** Download one entry, adopt it, and remember how old the file said it was. The fetch is plain:
  *  these sources serve CORS, and a Rust round-trip would buy nothing but a layer to debug. */
 async function fetchEntry(e: CatalogueEntry): Promise<void> {
-  repoStatusEl.textContent = `fetching ${e.name}…`;
+  repoStatusEl.textContent = t('repo.fetching', { name: e.name });
   try {
     const r = await boundFetch(e.uri);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1303,17 +1369,17 @@ async function fetchEntry(e: CatalogueEntry): Promise<void> {
     await saveFlightFile(kv, 'airspace', { name: `${e.id} (${e.name})`, text });
     await putJson(kv, REPO_HELD_KEY, repoHeld);
     const r2 = adoptAirspace(text);
-    (app.querySelector('#oa-label') as HTMLElement).textContent = `${r2.label} (from the repository)`;
-    repoStatusEl.textContent = r2.adopted
-      ? `${e.name}: ${r2.label}`
-      : `${e.name}: ${r2.label}`;
+    (app.querySelector('#oa-label') as HTMLElement).textContent =
+      t('fly.fromRepository', { label: r2.label });
+    repoStatusEl.textContent = `${e.name}: ${r2.label}`;
     renderRepo();
     render(state, link);
   } catch (err) {
     // A failed download changes NOTHING: the airspace already loaded stays loaded, and the pilot
     // is told which file he is still flying with rather than being left to wonder.
-    repoStatusEl.textContent =
-      `${e.name}: download failed (${err instanceof Error ? err.message : String(err)}) — the airspace you already had is unchanged`;
+    repoStatusEl.textContent = t('repo.downloadFailed', {
+      name: e.name, error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -1327,7 +1393,7 @@ repoEl.onclick = e => {
   else if (btn.dataset.act === 'use') void (async () => {
     // 'use' re-adopts what is already on disk — no network, so it works in the air.
     const f = await loadFlightFile(kv, 'airspace');
-    if (!f) { repoStatusEl.textContent = 'nothing stored for that entry'; return; }
+    if (!f) { repoStatusEl.textContent = t('repo.nothingStored'); return; }
     const r = adoptAirspace(f.text);
     repoStatusEl.textContent = `${entry.name}: ${r.label}`;
     render(state, link);
@@ -1346,12 +1412,11 @@ async function refreshBriefing(): Promise<void> {
   // thermals by this one's error (the finding that put this reset here).
   if (bfSpec?.id !== prevId) {
     bfCal = 1;
-    calEl.textContent = 'calibration —';
+    calEl.textContent = t('bf.calibration');
   }
   if (!bfSpec) {
     bfHeld = null;
-    completenessEl.innerHTML =
-      '<div class="pack-status unknown">No pack — enter a centre, a radius and a day above.</div>';
+    completenessEl.innerHTML = `<div class="pack-status unknown">${t('pack.none')}</div>`;
     renderNet();
     // The sandbox needs no pack: a synthetic sky can be briefed with nothing on disk. The
     // surface reference is unknown without a centre, so the kernel's documented fallback (0)
@@ -1369,7 +1434,7 @@ async function refreshBriefing(): Promise<void> {
   const held = await heldFor(bfSpec, kv);
   if (epoch !== bfEpoch) return;
   bfHeld = held;
-  completenessEl.innerHTML = completenessHtml(completeness(bfSpec, held, Z, Date.now()));
+  completenessEl.innerHTML = completenessHtml(completeness(bfSpec, held, Z, Date.now()), t);
   renderNet();
   const refElev = elev(c.lon, c.lat);
   if (bfSource === 'sandbox' && refElev == null) {
@@ -1402,7 +1467,7 @@ const boundFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
  *  (OFF-006). Shared by the form's Provision button and by an accepted update offer:
  *  OFF-009's "accept" is nothing more than provisioning the same spec again. */
 async function provision(spec: PackSpec): Promise<void> {
-  progressEl.textContent = 'starting…';
+  progressEl.textContent = t('bf.starting');
   // The pack goes on the shelf BEFORE the download (a confirmed finding): an eviction that
   // runs mid-download — a remove click, a concurrent provision finishing — must see the
   // arriving tiles as OWNED, or it classifies them as orphans and evicts the pack while it
@@ -1415,13 +1480,11 @@ async function provision(spec: PackSpec): Promise<void> {
     }, Date.now);
     // Counts, not verdicts: the completeness panel below is where failures become words
     // (OFF-010), and refreshBriefing repaints it from what actually landed.
-    progressEl.textContent = failed === 0
-      ? `done — ${ok} items held`
-      : `${ok} held, ${failed} failed — see completeness below`;
+    progressEl.textContent = failed === 0 ? t('bf.done', { ok }) : t('bf.partial', { ok, failed });
   } catch {
     // downloadPack counts item failures instead of throwing; only the store itself dying can
     // land here. What was written IS written — re-measure and let completeness say the rest.
-    progressEl.textContent = 'download interrupted — see completeness below';
+    progressEl.textContent = t('bf.interrupted');
   }
   // The bookkeeping is NOT inside the try (a confirmed finding): a failed shelf-save must
   // not print 'download interrupted' over a download that completed. Each failure gets its
@@ -1429,7 +1492,7 @@ async function provision(spec: PackSpec): Promise<void> {
   try {
     lastPlan = await enforceBudget(kv, shelf, budgetMB() * BYTES_PER_MB);
   } catch (e) {
-    progressEl.textContent += ` — cache enforcement failed: ${String(e)}`;
+    progressEl.textContent += t('bf.enforceFailed', { error: String(e) });
   }
   void refreshShelf();
   void refreshBriefing();
@@ -1439,7 +1502,7 @@ q<HTMLFormElement>('#bf-form').onsubmit = e => {
   e.preventDefault();
   const spec = readSpec();
   if (!spec) {
-    progressEl.textContent = 'enter a centre, a radius and a day first';
+    progressEl.textContent = t('bf.provisionFirst');
     return;
   }
   void provision(spec);
@@ -1502,10 +1565,9 @@ shelfEl.onclick = e => {
 budgetIn.onchange = () => void (async () => {
   // The committed value joins the ONE settings record — through the normalizer, like every
   // other write — so saving the ceiling can never drop the polar or the classes beside it.
-  settings = normalizeSettings({ ...settings, cacheBudgetMB: Number(budgetIn.value) });
+  applySettings({ cacheBudgetMB: Number(budgetIn.value) });
   budgetIn.value = String(settings.cacheBudgetMB);   // show the value that will actually rule
   try {
-    await saveSettings(kv, settings);
     lastPlan = await enforceBudget(kv, shelf, settings.cacheBudgetMB * BYTES_PER_MB);
   } catch { /* the cache line repaints from what really happened either way */ }
   await refreshShelf();
@@ -1527,15 +1589,15 @@ sandboxFs.onchange = () => {
   // A different atmosphere is a different day to calibrate against: the factor was measured
   // against ONE sky, and it does not follow the pilot across the toggle.
   bfCal = 1;
-  calEl.textContent = 'calibration —';
+  calEl.textContent = t('bf.calibration');
   void refreshBriefing();
 };
 
 compsEl.onchange = e => {
-  const t = e.target as HTMLInputElement;
-  const i = Number(t.dataset.i);
+  const el = e.target as HTMLInputElement;
+  const i = Number(el.dataset.i);
   if (Number.isInteger(i) && i >= 0 && i < bfOn.length) {
-    bfOn[i] = t.checked;
+    bfOn[i] = el.checked;
     paintMap();                       // applyWeights renormalises; what is off is off
   }
 };
@@ -1567,7 +1629,7 @@ igcIn.onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
   if (!bfSpec) {
-    calEl.textContent = 'calibration — (choose an area and day first)';
+    calEl.textContent = t('bf.calibrationNeedsArea');
     return;
   }
   const pts = parseIGC(await f.text());
@@ -1579,10 +1641,10 @@ igcIn.onchange = async e => {
   const accepted = bfWx != null && usable >= MIN_RATIOS;
   bfCal = accepted ? factor : 1;
   calEl.innerHTML = accepted
-    ? `calibration ×${bfCal.toFixed(2)}`
-      + ' <span class="badge modelled" title="indicative, not validated — not a measurement">modelled</span>'
-      + ` (from ${usable} usable climbs)`
-    : `calibration — (needs a forecast and ≥ ${MIN_RATIOS} usable climbs)`;
+    ? t('bf.calibrationOf', { factor: bfCal.toFixed(2) })
+      + ` <span class="badge modelled" title="${t('badge.modelled.title')}">${t('badge.modelled')}</span> `
+      + t('bf.calibrationFrom', { n: usable })
+    : t('bf.calibrationRefused', { n: MIN_RATIOS });
   renderDay();
 };
 
@@ -1603,7 +1665,7 @@ setInterval(() => {
   if (bf.hidden) return;                        // re-measured on entry anyway (OFF-010)
   renderNet();
   if (bfSpec && bfHeld)
-    completenessEl.innerHTML = completenessHtml(completeness(bfSpec, bfHeld, Z, Date.now()));
+    completenessEl.innerHTML = completenessHtml(completeness(bfSpec, bfHeld, Z, Date.now()), t);
 }, 60_000);
 
 // Tiles land asynchronously — from provisioning, from the briefing's own ensureArea, from the
@@ -1621,14 +1683,67 @@ onTilesChanged = () => {
 const tabFly = root.querySelector<HTMLButtonElement>('#tab-fly')!;
 const tabBf = root.querySelector<HTMLButtonElement>('#tab-briefing')!;
 const tabAna = root.querySelector<HTMLButtonElement>('#tab-analysis')!;
-function showTab(which: 'fly' | 'briefing' | 'analysis'): void {
+const tabSet = root.querySelector<HTMLButtonElement>('#tab-settings')!;
+
+/** The chrome the pilot reads before he reads anything else: the four tab names. Repainted on
+ *  every settings write, because a language change that left the tabs in the old language would
+ *  be a language change the pilot could not finish reading. textContent, not innerHTML — these
+ *  are words, not markup, and the catalogue is not a template engine. */
+function renderChrome(): void {
+  tabFly.textContent = t('tab.fly');
+  tabBf.textContent = t('tab.briefing');
+  tabAna.textContent = t('tab.analysis');
+  tabSet.textContent = t('tab.settings');
+  renderFlyChrome();
+}
+
+/** The Fly screen's control strip, in the pilot's language — the half of IHM-006 that used to get
+ *  away.
+ *
+ *  render() repaints #fly-view and nothing else, deliberately: the strip is a form, and a form
+ *  rebuilt at 1 Hz eats the caret the pilot is typing a QNH into. But that left its words frozen in
+ *  whatever language the app booted in. A pilot switching to French got French tabs, French boxes,
+ *  French alerts — and an English record button, an English audio button, an English 'no goal' and
+ *  an English list of landable categories, which are precisely the controls he touches in the air.
+ *
+ *  So the strip is repainted here, and ONLY the words: every [data-i18n] span, every title, and the
+ *  four controls whose text is a function of STATE rather than of markup. The inputs themselves are
+ *  never touched — what he typed stays typed, and the file he picked stays picked. */
+function renderFlyChrome(): void {
+  for (const el of app.querySelectorAll<HTMLElement>('[data-i18n]'))
+    el.textContent = t(el.dataset.i18n!);
+  for (const el of app.querySelectorAll<HTMLElement>('[data-i18n-title]'))
+    el.title = t(el.dataset.i18nTitle!);
+
+  // State, not markup: these four say what the app is DOING, and the sentence must be re-derived
+  // rather than remembered — a remembered sentence is the old language's sentence.
+  const goalLabel = app.querySelector<HTMLElement>('#goal-label')!;
+  goalLabel.textContent = goal === null
+    ? t('fly.noGoal')
+    : t('fly.goalAt', {
+        lat: goal.lat.toFixed(3), lon: goal.lon.toFixed(3),
+        elev: formatText(goal.elev, 'altitude', settings.units.altitude),
+      });
+  app.querySelector<HTMLElement>('#rec')!.textContent =
+    logger === null ? t('fly.record') : t('fly.stopSave');
+  app.querySelector<HTMLElement>('#audio-on')!.textContent =
+    audio?.running ? t('fly.audioOn') : t('fly.audioOff');
+  // LND-008's four boxes carry the category names, which are catalogue words too. The filter STATE
+  // is passed back in, so repainting the words cannot silently untick a box the pilot ticked.
+  app.querySelector<HTMLElement>('#lnd-filter-slot')!.innerHTML = styleFilterHtml(styleFilter, t);
+}
+
+function showTab(which: 'fly' | 'briefing' | 'analysis' | 'settings'): void {
   app.hidden = which !== 'fly';
   bf.hidden = which !== 'briefing';
   ana.hidden = which !== 'analysis';
+  setEl.hidden = which !== 'settings';
   tabFly.classList.toggle('active', which === 'fly');
   tabBf.classList.toggle('active', which === 'briefing');
   tabAna.classList.toggle('active', which === 'analysis');
+  tabSet.classList.toggle('active', which === 'settings');
   if (which === 'analysis') renderAnalysis();
+  if (which === 'settings') renderSettings();
   // Screen entry re-measures here too, and for the same reason the briefing does (OFF-010): tiles
   // land while this screen is hidden — a whole pack's worth, if the pilot went to the Briefing tab
   // to provision one — and onFlyTiles deliberately does not repaint a hidden canvas. Coming back
@@ -1652,6 +1767,7 @@ function showTab(which: 'fly' | 'briefing' | 'analysis'): void {
 tabFly.onclick = () => showTab('fly');
 tabBf.onclick = () => showTab('briefing');
 tabAna.onclick = () => showTab('analysis');
+tabSet.onclick = () => showTab('settings');
 
 // ============ the Analysis screen — Phase 6 (ANA-001/003, CNC-001/002/003) ============
 // Everything here is ABOUT a flight, and every number on it is either a measurement of what
@@ -1665,7 +1781,7 @@ const ana = root.querySelector<HTMLElement>('#analysis')!;
  *  under it — the day's real work, where it came from. */
 function barographSvg(track: TrackPoint[], wPx = 640, hPx = 200): string {
   const b = barograph(track);
-  if (!b) return '<div class="link">No flight yet — connect, or replay an IGC, and come back.</div>';
+  if (!b) return `<div class="link">${t('ana.noFlight')}</div>`;
   const span = Math.max(1, b.endSod - b.startSod);
   const lo = b.minAltM - 50, hi = b.maxAltM + 50;
   const x = (sod: number): number => ((sod - b.startSod) / span) * wPx;
@@ -1680,12 +1796,25 @@ function barographSvg(track: TrackPoint[], wPx = 640, hPx = 200): string {
     ${bands}<path class="baro-line" d="M ${line}"/></svg>`;
 }
 
+/** The Analysis screen's boxes go through infobox-ui's `boxHtml` — the SAME primitive the Fly
+ *  screen's registry renders through, because two box renderers would be two answers to "what
+ *  does an unknown look like" and only one of them would be the tested one.
+ *
+ *  A quantity is named where there is one (altitudes are altitudes, kilometres are distances), so
+ *  the pilot's unit choice reaches this screen too; the pure RATIOS — a glide ratio, a percentage,
+ *  a count of climbs — are not quantities in units.ts's sense and carry a fixed unit instead. */
+const anaBox = (
+  labelId: string, v: number | null, q: Quantity | null,
+  opts?: { fixedUnit?: string; digits?: number; badge?: string },
+): string => boxHtml(t(labelId), v, q, settings.units, opts);
+
+const badgeHtml = (cls: string, textId: string, titleId: string): string =>
+  ` <span class="badge ${cls}" title="${t(titleId)}">${t(textId)}</span>`;
+
 function renderAnalysis(): void {
   const track = flightTrack;
   if (track.length < 2) {
-    ana.innerHTML = `<h1>VOLPLANE — analysis</h1>
-      <div class="link">No flight yet — connect to Condor, or replay an IGC on the Fly screen,
-      and this screen fills itself from the fixes as they arrive.</div>`;
+    ana.innerHTML = `<h1>${t('ana.title')}</h1><div class="link">${t('ana.noFlight')}</div>`;
     return;
   }
   const b = barograph(track)!;
@@ -1696,37 +1825,147 @@ function renderAnalysis(): void {
   const eg = effectiveGlide(track, polar, wind);
   const free = freeDistance(track);
   const fai = faiTriangle(track);
-  const km = (m: number | null | undefined): string | null => m == null ? null : (m / 1000).toFixed(1);
 
   ana.innerHTML = `
-    <h1>VOLPLANE — analysis</h1>
+    <h1>${t('ana.title')}</h1>
     <div class="boxes">
-      ${box('Max altitude', fmt(b.maxAltM), 'm')}
-      ${box('Height gained', fmt(b.gainM), 'm')}
-      ${box('Climbs', fmt(climbs(track).length))}
-      ${box('Achieved L/D', fmt(eg.achievedLD, 1), '',
-            eg.windCorrected ? '' : ' <span class="badge estimated" title="ground distance, no wind estimate yet — a downwind glide flatters it">uncorr.</span>')}
-      ${box('Polar L/D', fmt(eg.theoreticalLD, 1), '',
-            ' <span class="badge modelled" title="what the polar claims — a model of the glider, not a measurement of this flight">modelled</span>')}
-      ${box('Achieved / book', fmt(eg.ratio, 2))}
+      ${anaBox('ana.maxAlt', b.maxAltM, 'altitude')}
+      ${anaBox('ana.gain', b.gainM, 'altitude')}
+      ${anaBox('ana.climbs', climbs(track).length, null, { digits: 0 })}
+      ${anaBox('ana.achievedLD', eg.achievedLD, null, {
+        digits: 1,
+        badge: eg.windCorrected ? '' : badgeHtml('estimated', 'ana.uncorrected', 'ana.uncorrected.title'),
+      })}
+      ${anaBox('ana.polarLD', eg.theoreticalLD, null, {
+        digits: 1, badge: badgeHtml('modelled', 'badge.modelled', 'ana.polarLD.title'),
+      })}
+      ${anaBox('ana.ratio', eg.ratio, null, { digits: 2 })}
     </div>
-    <h2>Scoring — ${free?.rules ?? fai?.rules ?? 'olc-2024'}</h2>
+    <h2>${t('ana.scoring', { rules: free?.rules ?? fai?.rules ?? 'olc-2024' })}</h2>
     <div class="boxes">
-      ${box('Free distance', km(free?.distanceM ?? null), 'km')}
-      ${box('Free points', fmt(free?.points ?? null, 1))}
-      ${box('FAI triangle', km(fai?.distanceM ?? null), 'km')}
-      ${box('FAI points', fmt(fai?.points ?? null, 1))}
-      ${box('Shortest leg', fai ? (fai.minLegFraction * 100).toFixed(1) : null, '%',
-            fai ? ' <span class="badge ready" title="CNC-003: the 28% shape rule is satisfied — the search only ever returns legal triangles">FAI ok</span>' : '')}
+      ${anaBox('ana.freeDistance', free?.distanceM ?? null, 'distance')}
+      ${anaBox('ana.freePoints', free?.points ?? null, null, { digits: 1 })}
+      ${anaBox('ana.faiDistance', fai?.distanceM ?? null, 'distance')}
+      ${anaBox('ana.faiPoints', fai?.points ?? null, null, { digits: 1 })}
+      ${anaBox('ana.shortestLeg', fai ? fai.minLegFraction * 100 : null, null, {
+        digits: 1, fixedUnit: '%',
+        badge: fai ? badgeHtml('ready', 'ana.faiOk', 'ana.faiOk.title') : '',
+      })}
     </div>
-    <div class="link">A cockpit estimate on a decimated track (CNC). The IGC file, scored by
-      the league's own software, is the judge of record — this number is for flying by, not
-      for claiming with.</div>
-    <h2>Barograph</h2>
+    <div class="link">${t('ana.disclaimer')}</div>
+    <h2>${t('ana.barograph')}</h2>
     ${barographSvg(track)}
-    <div class="link">Shaded: the climbs, as soaring-core's detector found them.</div>
+    <div class="link">${t('ana.barographNote')}</div>
   `;
 }
+
+// ============ the Settings screen — Block 3 (CFG-002/003/005, IHM-001/002/006) ============
+// The screen the pilot makes his own. settings-ui renders it as a pure string from the settings
+// VALUE; this is the twenty lines that turn a tap on it back into a value.
+//
+// One delegated listener, on a container built once — the shelf's contract, and for the shelf's
+// reason: the panel repaints WHOLE after every change (that is how a preset filling eight rows
+// shows up in eight rows), so a handler bound to a <select> would die with the first choice the
+// pilot made. data-act says what he did, data-id says to what, and applySettings does the rest:
+// normalize, persist, re-derive the translator and the polar, repaint everything. There is no
+// submit button anywhere on this screen, and there must not be: a submit is a moment where the
+// screen and the settings disagree, and CFG-005's promise ("what he chooses is what he flies with
+// tomorrow") has no room for such a moment.
+
+const setEl = root.querySelector<HTMLElement>('#settings')!;
+
+function renderSettings(): void {
+  setEl.innerHTML = settingsHtml(settings, t);
+}
+
+/** Move a box within a page, or take it off. The REDUCER is core's (infobox.editPages) — pure,
+ *  tested, and the keeper of the one rule that cost a page: a page never loses its last box. This
+ *  shell function is what is left of the old one, which is the writing of the result down. */
+function editPage(pageId: string, act: PageEdit, boxId: string): void {
+  applySettings({ pages: editPages(settings.pages, pageId, act, boxId) });
+}
+
+/** One handler for every control on the panel. `change` and `click` both land here because a
+ *  <select> commits on change and a <button> on click, and splitting them across two listeners
+ *  would be two places to forget an act.
+ *
+ *  Which is why the EVENT is now part of the question. Both listeners used to reach the switch
+ *  below with no notion of which had fired, and every control on the panel carries a data-act — so
+ *  a plain CLICK on a <select> or an <input> was handled as a commit of its current value. Tapping
+ *  the mass box to type into it committed the empty box, applySettings repainted the whole panel
+ *  through innerHTML, and the input under the pilot's finger was destroyed before a digit landed:
+ *  the mass was not merely awkward to enter, it could not be entered at all. Tapping the glider
+ *  list to browse it re-ran the 'glider' case, which unconditionally clears `polar` and `massKg` —
+ *  a click that chose nothing silently erased an imported .plr and reset a ballasted glider to its
+ *  reference mass, and repainted the panel out from under the dropdown he had just opened.
+ *
+ *  settings-ui.commits() is the table: a <select>/<input> speaks on change, a <button> on click. It
+ *  lives beside the markup that emits the acts, and a test walks the rendered panel to keep the two
+ *  honest. A click is not a choice. */
+function onSettingsEvent(e: Event): void {
+  const el = (e.target as HTMLElement).closest('[data-act]') as HTMLElement | null;
+  const act = el?.dataset.act;
+  if (!el || !act) return;
+  if (!commits(act, e.type)) return;
+  const id = el.dataset.id ?? '';
+  const page = el.dataset.page ?? '';
+  const value = (el as HTMLInputElement | HTMLSelectElement).value ?? '';
+
+  switch (act) {
+    case 'lang':
+      // isLang, not a cast: the <select> is ours today, but a stored or injected value that is
+      // not a language we speak must not become the language we try to speak.
+      if (isLang(value)) applySettings({ lang: value });
+      break;
+    case 'preset':
+      // The preset FILLS the rows; it is not itself the setting (CFG-003). The rows are the
+      // truth, and the pilot edits them afterwards — the mixed panel (feet, knots, m/s) is the
+      // normal European case and no single preset can name it.
+      if (id in PRESETS) applySettings({ units: { ...PRESETS[id as UnitSystem] } });
+      break;
+    case 'unit':
+      applySettings({ units: { ...settings.units, [id as Quantity]: value as UnitSystem } });
+      break;
+    case 'glider': {
+      // CFG-002 and CFG-007, kept mutually exclusive at the source rather than reconciled at the
+      // render: picking a library glider CLEARS the imported .plr, because activePolar would
+      // otherwise go on flying the import while this picker showed the pick. One glider flies,
+      // and the screen names it.
+      const entry = value === '' ? null : GLIDER_LIBRARY.find(g => g.id === value) ?? null;
+      applySettings({
+        glider: entry === null ? null : { libId: entry.id, massKg: null },
+        polar: null,
+      });
+      plrLabel.textContent = polarName();
+      break;
+    }
+    case 'mass': {
+      if (settings.glider === null) break;         // no reference mass to adjust: nothing to set
+      // The box speaks the pilot's MASS unit, and core's massKgFromField is what turns it back into
+      // kilograms — through the same table that printed the placeholder he typed over. It also owns
+      // the two refusals: an empty box is the entry's own reference mass and not a mass of zero
+      // (POT-007: we do not invent his ballast), and a mass outside the plausible band around that
+      // reference is a typo, not a ballast state. '45' for '450' used to be accepted, persisted,
+      // and flown: a polar ten times too steep driving every glide on the screen.
+      const entry = GLIDER_LIBRARY.find(g => g.id === settings.glider!.libId);
+      const massKg = entry === undefined
+        ? null
+        : massKgFromField(value, entry.refMassKg, settings.units.mass);
+      applySettings({ glider: { libId: settings.glider.libId, massKg } });
+      break;
+    }
+    case 'box-add':
+      if (value !== '') editPage(page, act, value);
+      break;
+    case 'box-up':
+    case 'box-down':
+    case 'box-remove':
+      editPage(page, act, id);
+      break;
+  }
+}
+setEl.onchange = onSettingsEvent;
+setEl.onclick = onSettingsEvent;
 
 // ---- what came back from disk (OFF-002) ----
 
@@ -1767,6 +2006,10 @@ function restoreSettings(): void {
   (app.querySelector('#set-classes') as HTMLInputElement).value =
     settings.monitoredClasses?.join(', ') ?? '';
   plrLabel.textContent = polarName();
+  // The language, the units, the pages and the glider came back with the record; the chrome and
+  // the panel are the two places that SHOW them, and neither has been painted yet.
+  renderChrome();
+  renderSettings();
 }
 
 // SYS-001's other half: a journal still on disk at startup IS a crash — the clean stop path
@@ -1807,3 +2050,10 @@ render(state, link);
 await restoreOrphan();
 void restoreFlightFiles();
 restoreSettings();
+
+// IHM-006 at the FIRST paint, not only at the next change. The settings came back from disk before
+// any screen rendered (OFF-002), so the language the pilot chose last season is already in hand —
+// and the chrome is where it lands: the four tabs, and every word of the Fly strip. Without this
+// call the app booted in whatever language the markup happened to be written in, and only started
+// speaking his the first time he touched a setting.
+renderChrome();

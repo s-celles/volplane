@@ -8,7 +8,18 @@
 import { test, expect } from 'bun:test';
 import { simpleTask, aatTask, freshProgress, freshAat, type Waypoint } from '../core/task';
 import { taskStats, type TaskStats } from '../core/taskstats';
-import { taskRibbonHtml, DASH } from './task-ui';
+import { taskRibbonHtml as taskRibbonHtmlT, DASH } from './task-ui';
+import { translator } from '../core/i18n';
+import { PRESETS } from '../core/units';
+
+const en = translator('en');
+// Metric unless a test says otherwise — km and km/h are what these claims were written in, and
+// they are now a CHOICE (CFG-003) rather than this file's assumption. The choice is pinned below.
+const METRIC = PRESETS.metric;
+const taskRibbonHtml = (
+  a: Parameters<typeof taskRibbonHtmlT>[0], b: Parameters<typeof taskRibbonHtmlT>[1],
+  c: Parameters<typeof taskRibbonHtmlT>[2], d: Parameters<typeof taskRibbonHtmlT>[3],
+): string => taskRibbonHtmlT(a, b, c, d, METRIC, en);
 
 const S: Waypoint = { name: 'START', lon: 6.0, lat: 46.0 };
 const T1: Waypoint = { name: 'TP1', lon: 6.0, lat: 46.4 };
@@ -88,4 +99,26 @@ test('a waypoint name from the pilot\'s own file cannot become markup', () => {
   const html = taskRibbonHtml(t, freshProgress(t), freshAat(t), NOTHING);
   expect(html).toContain('&lt;b&gt;Étoile&lt;/b&gt;');
   expect(html).not.toContain('<b>');
+});
+
+// ---- CFG-003: the ribbon reads in the units the pilot chose ----
+
+test('the ribbon honours the pilot\'s units — it sits above boxes that already did', () => {
+  // The failure this pins: the InfoBoxes a centimetre below the ribbon printed knots while the
+  // ribbon printed km/h, because the ribbon's km and km/h were baked into it. His task sheet may
+  // well say km/h — that is a reason for km/h to be the default, not a reason to overrule him.
+  const p = freshProgress(simpleTask([S, T1, F]));
+  const s: TaskStats = { ...NOTHING, remainingM: 48_000, achievedMs: 26.4 };
+  const aviation = taskRibbonHtmlT(simpleTask([S, T1, F]), p, null, s, PRESETS.aviation, en);
+  expect(aviation).toContain('25.9 NM');
+  expect(aviation).toContain('51 kt');
+  expect(aviation).not.toContain('48.0 km');
+  expect(aviation).not.toContain('95 km/h');
+  // Metric is still metric: the default did not move, it merely stopped being the only option.
+  const metric = taskRibbonHtmlT(simpleTask([S, T1, F]), p, null, s, PRESETS.metric, en);
+  expect(metric).toContain('48.0 km');
+  expect(metric).toContain('95 km/h');
+  // An unknown is still a dash, in every unit — a null does not become '0 kt' on the way through.
+  expect(taskRibbonHtmlT(simpleTask([S, T1, F]), p, null, NOTHING, PRESETS.aviation, en))
+    .toContain(DASH);
 });

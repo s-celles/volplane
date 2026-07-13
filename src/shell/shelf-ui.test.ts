@@ -4,7 +4,18 @@
 // deliberately NOT pinned; what must survive refactoring is what the strings SAY and the
 // data-act/data-id contract main.ts delegates on.
 import { describe, expect, test } from 'bun:test';
-import { cacheHtml, shelfHtml } from './shelf-ui';
+import { shelfHtml as shelfHtmlT, cacheHtml as cacheHtmlT, BYTES_PER_MB } from './shelf-ui';
+import { translator } from '../core/i18n';
+
+// IHM-006: a translator in, the same claims out.
+const en = translator('en');
+const shelfHtml = (
+  a: Parameters<typeof shelfHtmlT>[0], b: Parameters<typeof shelfHtmlT>[1],
+  c: Parameters<typeof shelfHtmlT>[2],
+): string => shelfHtmlT(a, b, c, en);
+const cacheHtml = (
+  a: Parameters<typeof cacheHtmlT>[0], b: number, c: Parameters<typeof cacheHtmlT>[2],
+): string => cacheHtmlT(a, b, c, en);
 import type { Completeness } from '../core/pack';
 import type { ShelfEntry, UpdateOffer } from '../core/shelf';
 import type { EvictionPlan } from '../core/cachebudget';

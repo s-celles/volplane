@@ -30,13 +30,14 @@
 
 import { BINS, type Rose } from '../core/circleassist';
 import { liftBin, BIN_COLORS } from 'soaring-core/liftviz';
+import type { T } from './infobox-ui';
 
 /** VEN-001's badge, character for character as main.ts writes it for the wind — same class,
  *  same shape, because the two things wear the same epistemic status and the pilot must learn
  *  ONE badge, not two. The rose is an estimate built out of measurements: real vario readings,
  *  binned and decayed around a circle centre we INFERRED. It is not the vario. */
-const EST_BADGE =
-  '<span class="badge estimated" title="binned vario around an inferred circle centre — an estimate, not the instrument">est</span>';
+const estBadge = (t: T): string =>
+  `<span class="badge estimated" title="${t('badge.estimated.rose')}">${t('badge.estimated')}</span>`;
 
 /** The kernel's RGBA tuple as CSS. Alpha comes out of liftviz in 0–255, where it encodes the
  *  strength of the claim; we keep it — a weak bin SHOULD look weak — but floor it, because a
@@ -65,9 +66,9 @@ function wedge(cx: number, cy: number, r0: number, r1: number, a0: number, a1: n
 /** The rose, as an HTML string wrapping an SVG. Null in ⇒ the honest placeholder: the glider is
  *  not circling (or has not closed a circle, or has no vario), and an empty ring drawn anyway
  *  would read as "no lift anywhere on this circle" — a measurement nobody made. */
-export function roseSvg(r: Rose | null, wPx = 200, hPx = 200): string {
+export function roseSvg(r: Rose | null, t: T, wPx = 200, hPx = 200): string {
   if (!r) {
-    return `<div class="rose rose-none">not circling — no rose</div>`;
+    return `<div class="rose rose-none">${t('rose.none')}</div>`;
   }
 
   const cx = wPx / 2, cy = hPx / 2;
@@ -81,7 +82,7 @@ export function roseSvg(r: Rose | null, wPx = 200, hPx = 200): string {
     // the whole point of the branch.
     if (b.vzMs == null) {
       return `<path class="rose-wedge rose-empty" d="${d}" fill="url(#rose-hatch)"`
-        + ` data-bearing="${b.bearing}"><title>${b.bearing}° — not sampled</title></path>`;
+        + ` data-bearing="${b.bearing}"><title>${b.bearing}° — ${t('rose.notSampled')}</title></path>`;
     }
     return `<path class="rose-wedge rose-lift" d="${d}" fill="${liftColour(b.vzMs)}"`
       + ` data-bearing="${b.bearing}"><title>${b.bearing}° — ${b.vzMs.toFixed(1)} m/s</title></path>`;
@@ -110,10 +111,13 @@ export function roseSvg(r: Rose | null, wPx = 200, hPx = 200): string {
   // deny it. The picture said "seven holes"; the sentence said "even lift", and at sixty degrees
   // of bank the sentence is what he reads. Two facts, two sentences (POT-007).
   const advice = r.best
-    ? `shift towards ${String(Math.round(r.best.bearing)).padStart(3, '0')}° · ${r.best.vzMs.toFixed(1)} m/s`
+    ? t('rose.shift', {
+        bearing: String(Math.round(r.best.bearing)).padStart(3, '0'),
+        vz: r.best.vzMs.toFixed(1),
+      })
     : r.noAdvice === 'under-sampled'
-      ? 'not enough of the circle sampled — no advice'
-      : 'even lift — no shift';
+      ? t('rose.underSampled')
+      : t('rose.evenLift');
   // The unmeasured case is greyed, like every other "we do not know" on this screen. A refusal
   // and a finding must not read alike.
   const adviceClass = r.best == null && r.noAdvice === 'under-sampled'
@@ -129,7 +133,7 @@ export function roseSvg(r: Rose | null, wPx = 200, hPx = 200): string {
     + `</svg>`;
 
   return `<div class="rose">`
-    + `<div class="rose-head">Circling assistant ${EST_BADGE}</div>`
+    + `<div class="rose-head">${t('rose.head')} ${estBadge(t)}</div>`
     + svg
     + `<div class="${adviceClass}">${advice}</div>`
     + `</div>`;

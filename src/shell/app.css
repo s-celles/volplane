@@ -345,3 +345,46 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
 .repo-age.stale { color: var(--bad); font-weight: 600; }
 .repo-age.unknown { color: var(--warn); }
 .repo-lic.unknown { color: var(--warn); }
+
+/* ---- IHM-002: the pages the pilot flips between as the flight changes phase ----
+   Quieter than the top tab bar on purpose: the top bar switches SCREENS, these switch a
+   handful of numbers, and giving them the same weight would make the screen shout twice. */
+.page-tabs { display: flex; gap: .4rem; margin-bottom: .75rem; }
+.page-tab { background: transparent; color: var(--dim); border-color: transparent; font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; padding: .3rem .6rem; }
+.page-tab.active { color: var(--fg); background: #151920; border-color: #3a4350; }
+
+/* ---- CFG-002/003/005, IHM-001/002/006: the settings panel ----
+   A two-column grid, label then control, because a settings screen a pilot skims is a settings
+   screen he mis-sets. Nothing here is styled to be pretty; it is styled to be read at a glance
+   on the ground, and then never looked at again in the air. */
+.settings { max-width: 40rem; }
+.settings-section { margin: 1.5rem 0; padding-top: 1rem; border-top: 1px solid #2a313c; }
+.settings-section h3 { font-size: .8rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin-bottom: .75rem; }
+.settings-section h4 { font-size: .75rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin-bottom: .5rem; }
+.settings-section select, .settings-section input { min-width: 12rem; }
+
+/* The label/control pair. One row per quantity (CFG-003) — the mixed panel (feet, knots, m/s)
+   is the normal European case, so the ROWS are the setting and the presets above are only a
+   shortcut into them. */
+.settings-row, .settings-unit-row { display: grid; grid-template-columns: 10rem 1fr auto; gap: .75rem; align-items: center; margin-bottom: .4rem; }
+.settings-row label, .settings-unit-row label { font-size: .85rem; color: var(--dim); }
+.settings-hint { font-size: .75rem; color: var(--dim); }
+.settings-presets { display: flex; gap: .5rem; align-items: center; margin-bottom: .75rem; flex-wrap: wrap; }
+.settings-presets-label { font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.settings-presets button { font-size: .8rem; padding: .3rem .6rem; }
+
+/* CFG-002/CFG-007: which polar actually flies. When an imported .plr is in force it OUTRANKS
+   the library pick, and the panel has to say so — a Discus selected in the picker while the
+   pilot's own .plr quietly flies his final glide is the one lie this section exists to prevent. */
+.settings-imported { margin-bottom: .75rem; padding: .5rem .75rem; border-radius: .35rem; background: #151920; border-left: 3px solid #4a7dbd; font-size: .85rem; }
+.settings-outranks { display: block; margin-top: .2rem; font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+
+/* IHM-001/002: the box editor. The ORDER is the configuration, so up and down are first-class
+   buttons and not a hidden drag nobody discovers. */
+.settings-page { margin: .75rem 0; padding: .75rem; border-radius: .5rem; background: #10141a; }
+.settings-page.active { border: 1px solid #3a4350; }
+.settings-boxes { margin-bottom: .5rem; }
+.settings-boxes-label { display: block; font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin-bottom: .35rem; }
+.settings-box-row { grid-template-columns: 1fr auto auto auto; }
+.settings-box-label { font-size: .85rem; }
+.settings-box-row button { font-size: .75rem; padding: .25rem .5rem; }

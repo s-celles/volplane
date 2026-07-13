@@ -12,6 +12,7 @@
 import type { Airspace } from '../core/airspace';
 import type { ElevSampler } from 'soaring-core/ports';
 import { mPerLng, M_PER_LAT } from 'soaring-core/geo';
+import type { T } from './infobox-ui';
 
 export interface XSectionInput {
   lon: number;
@@ -35,7 +36,7 @@ const SAMPLES = 120;
 /** The slice, as an SVG string. The ground is a filled path with GAPS where the DEM is
  *  unknown; the glide slope is a straight line from the glider; airspace floors crossing the
  *  slice are horizontal bars at their own altitude. */
-export function xsectionSvg(input: XSectionInput, wPx = 480, hPx = 200): string {
+export function xsectionSvg(input: XSectionInput, t: T, wPx = 480, hPx = 200): string {
   const { lon, lat, bearing, altM, rangeM, glideRatio: ld, elev, spaces } = input;
   const rad = bearing * Math.PI / 180;
   const dLon = Math.sin(rad) / mPerLng(lat), dLat = Math.cos(rad) / M_PER_LAT;
@@ -75,7 +76,9 @@ export function xsectionSvg(input: XSectionInput, wPx = 480, hPx = 200): string 
   // ground — it gets a hatch band and the word, because silence here is a lie.
   const unknownCount = ground.filter(g => g == null).length;
   const unknownBand = unknownCount > 0
-    ? `<text class="xs-unknown" x="6" y="14">${Math.round(100 * unknownCount / ground.length)}% of the ground ahead is NOT loaded</text>`
+    ? `<text class="xs-unknown" x="6" y="14">${t('xs.groundUnloaded', {
+        pct: Math.round(100 * unknownCount / ground.length),
+      })}</text>`
     : '';
 
   // The glide slope: where the glider will be, if it flies straight and the air does nothing.

@@ -3,7 +3,23 @@
 // so — and never as a DOM. Markup details (tag choice, class order) are deliberately NOT pinned:
 // what must survive refactoring is what the strings SAY.
 import { describe, expect, test } from 'bun:test';
-import { briefingHtml, completenessHtml, emagramSvg, offlineBadgeHtml } from './briefing-ui';
+import {
+  completenessHtml as completenessHtmlT, offlineBadgeHtml as offlineBadgeHtmlT,
+  briefingHtml as briefingHtmlT, emagramSvg as emagramSvgT,
+} from './briefing-ui';
+import { translator } from '../core/i18n';
+import { PRESETS } from '../core/units';
+
+// IHM-006: a translator in, the same claims out. The literals moved into the catalogue; the
+// tests read them back through it, so 'Cloudbase' is still pinned — as the catalogue's word.
+const en = translator('en');
+const fr = translator('fr');
+const completenessHtml = (c: Parameters<typeof completenessHtmlT>[0]): string => completenessHtmlT(c, en);
+const offlineBadgeHtml = (a: boolean, b: boolean, c: number | null, d: number): string =>
+  offlineBadgeHtmlT(a, b, c, d, en);
+const METRIC = PRESETS.metric;
+const briefingHtml = (b: Parameters<typeof briefingHtmlT>[0]): string => briefingHtmlT(b, METRIC, en);
+const emagramSvg = emagramSvgT;
 import { briefingAt, type Briefing, type EmagramGeom } from '../core/briefing';
 import { completeness, tilesForArea, tileKey, type Held, type PackSpec } from '../core/pack';
 
@@ -152,4 +168,55 @@ describe('emagramSvg', () => {
     expect(out).not.toContain('ceiling');
     expect(emagramSvg({ ...g, cloudbase: null }, 300, 200)).not.toContain('cloudbase');
   });
+});
+
+
+// ---- IHM-006: the briefing, in French ----
+
+test('the briefing panel translates — badge, warning and label alike (IHM-006)', () => {
+  const b: Briefing = {
+    hour: 13, source: 'forecast', cloudbase: 1800, ceiling: 2400, stability: 0.011,
+    summary: { depth: 1500, isCu: true, openTop: false }, wind: [], sounding: null,
+  };
+  const french = briefingHtmlT(b, METRIC, fr);
+  expect(french).toContain(fr('bf.cloudbase'));
+  expect(french).not.toContain('Cloudbase');
+  // POT-007's badge is the one word on this screen a pilot must not skim past: it says the
+  // number is a MODEL. A badge he cannot read is a badge that does not badge anything.
+  expect(french).toContain(fr('badge.modelled'));
+  expect(french).toContain(fr('badge.modelled.title'));
+  expect(french).not.toContain('indicative, not validated');
+  expect(briefingHtmlT(b, METRIC, en)).toContain('Cloudbase');
+  expect(briefingHtmlT(b, METRIC, en)).toContain('indicative, not validated');
+});
+
+test('a sandbox says SANDBOX in French too — a synthetic sky cannot pass for a real one', () => {
+  const b: Briefing = {
+    hour: 13, source: 'sandbox', cloudbase: 1800, ceiling: 2400, stability: 0.011,
+    summary: null, wind: [], sounding: null,
+  };
+  const french = briefingHtmlT(b, METRIC, fr);
+  expect(french).toContain('sandbox');                 // the CLASS survives translation…
+  expect(french).toContain(fr('bf.sandboxBanner'));    // …and the banner is in his language
+});
+
+// ---- CFG-003: the briefing reads in the units the pilot chose ----
+
+test('the briefing honours the pilot\'s units — a cloudbase he compares with his altimeter', () => {
+  const b: Briefing = {
+    hour: 13, source: 'forecast', cloudbase: 1800, ceiling: 2400, stability: 0.011,
+    summary: { depth: 1500, isCu: true, openTop: false },
+    wind: [{ alt: 1000, speed: 10, dirFrom: 270 }], sounding: null,
+  };
+  const aviation = briefingHtmlT(b, PRESETS.aviation, en);
+  expect(aviation).toContain('5906');                 // 1800 m of cloudbase, in feet
+  expect(aviation).toContain('ft');
+  expect(aviation).toContain('19');                   // 10 m/s of wind, in knots
+  expect(aviation).toContain('speed (kt)');           // …and the column header says so
+  expect(aviation).not.toContain('speed (km/h)');
+  // The unit lives in units.ts, not in the catalogue: the header takes it as a parameter.
+  const metric = briefingHtmlT(b, PRESETS.metric, en);
+  expect(metric).toContain('speed (km/h)');
+  expect(metric).toContain('alt (m)');
+  expect(metric).toContain('1800');
 });

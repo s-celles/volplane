@@ -2,7 +2,15 @@
 // one. A blank cell reads as "fine", and "fetched 5 days ago" reads as "5 days old" — and the
 // airspace inside may have been six months stale the day it was published.
 import { test, expect } from 'bun:test';
-import { repositoryHtml, freshnessHtml } from './repository-ui';
+import { repositoryHtml as repositoryHtmlT, freshnessHtml as freshnessHtmlT } from './repository-ui';
+import { translator } from '../core/i18n';
+
+const en = translator('en');
+const repositoryHtml = (
+  a: Parameters<typeof repositoryHtmlT>[0], b: Parameters<typeof repositoryHtmlT>[1],
+  c: Parameters<typeof repositoryHtmlT>[2], d: boolean,
+): string => repositoryHtmlT(a, b, c, d, en);
+const freshnessHtml = (f: Parameters<typeof freshnessHtmlT>[0]): string => freshnessHtmlT(f, en);
 import type { CatalogueEntry, Held } from '../core/catalogue';
 import { AIRSPACE_STALE_DAYS } from '../core/catalogue';
 

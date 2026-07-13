@@ -13,8 +13,8 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "soaring-core": "github:s-celles/soaring-core#v0.5.0",
-    "soaring-data": "github:s-celles/soaring-data",
+    "soaring-core": "github:s-celles/soaring-core#v0.6.0",
+    "soaring-data": "github:s-celles/soaring-data#v0.2.1",
     "upng-js": "^2.1.0"
   },
   "devDependencies": {

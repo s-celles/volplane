@@ -12,13 +12,41 @@
 import { expect, test } from 'bun:test';
 import { NONE_REACHABLE, type Alternate } from '../core/landables';
 import {
-  LANDABLE_STATE_CLASS, alternatesHtml, styleFilterHtml,
-  REACH_UNKNOWN, NO_ALTITUDE, NO_LANDABLE_IN_FILE, NO_STYLE_SELECTED,
-  noFieldInRadius, someNotJudged, noneOfJudgedReachable, STALE_VERDICTS,
-  type DivertPanel,
+  LANDABLE_STATE_CLASS, alternatesHtml as alternatesHtmlT,
+  styleFilterHtml as styleFilterHtmlT, type DivertPanel,
 } from './landables-ui';
 import { LANDABLE_CATS } from '../core/cup';
 import type { Poi } from '../core/cup';
+import { translator } from '../core/i18n';
+import { PRESETS } from '../core/units';
+
+// IHM-006: the panel's sentences used to be exported English constants and these tests pinned
+// the constants. They are catalogue entries now, and the tests pin the CATALOGUE — the same
+// claims, in the place a French pilot can also read them. NONE_REACHABLE stays imported from
+// core/landables: i18n.test.ts asserts the English entry IS that constant, so the loudest
+// sentence in the app still has exactly one source.
+const en = translator('en');
+const fr = translator('fr');
+// Metric unless a test says otherwise. CFG-003 — the row reads in the unit the pilot chose, the
+// same one his InfoBoxes read in — is pinned on its own, at the bottom of this file.
+const METRIC = PRESETS.metric;
+const alternatesHtml = (p: DivertPanel, limit?: number): string =>
+  limit == null ? alternatesHtmlT(p, METRIC, en) : alternatesHtmlT(p, METRIC, en, limit);
+const styleFilterHtml = (sel: Parameters<typeof styleFilterHtmlT>[0]): string =>
+  styleFilterHtmlT(sel, en);
+
+const REACH_UNKNOWN = en('lnd.reachUnknown');
+const NO_ALTITUDE = en('lnd.noAltitude');
+const NO_LANDABLE_IN_FILE = en('lnd.noLandableInFile');
+const NO_STYLE_SELECTED = en('lnd.noStyleSelected');
+const STALE_VERDICTS = en('lnd.stale');
+// The radius reaches the catalogue PREFORMATTED — '80 km', not '80' beside a hard-coded 'km' in
+// the sentence. That is what lets a pilot who chose nautical miles read the same sentence in NM.
+const noFieldInRadius = (dist: string): string => en('lnd.noFieldInRadius', { dist });
+const someNotJudged = (judged: number, inRadius: number, dist: string): string =>
+  en('lnd.someNotJudged', { judged, inRadius, dist });
+const noneOfJudgedReachable = (judged: number): string =>
+  en('lnd.noneOfJudgedReachable', { judged });
 
 /** A field with everything the .cup could say, so each test can null out exactly the thing it
  *  is asking about and nothing else. */
@@ -116,7 +144,7 @@ test('a capped list says how many fields it never asked about — and softens th
   const judged = [alt('Serres', 'unreachable', -80), alt('Aspres', 'unreachable', -900)];
   const h = html(judged, { inRadius: 12 });
 
-  expect(h).toContain(someNotJudged(2, 12, 80));
+  expect(h).toContain(someNotJudged(2, 12, '80 km'));
   expect(h).toContain(noneOfJudgedReachable(2));
   expect(h).not.toContain(NONE_REACHABLE);        // the unconditional claim is NOT made
 });
@@ -267,7 +295,7 @@ test('a pilot beyond his database\'s coverage is told so, not shown a blank corn
   // radius is 80, so core returns nothing — and the panel used to render as literally nothing, the
   // same pixels it uses for "you never loaded a file".
   const h = alternatesHtml(panel([], { landableCount: 400, inRadius: 0 }));
-  expect(h).toContain(noFieldInRadius(80));
+  expect(h).toContain(noFieldInRadius('80 km'));
   expect(h).not.toContain(NONE_REACHABLE);
 });
 
@@ -309,4 +337,50 @@ test('a narrowed selection unticks the categories it excludes', () => {
   const h = styleFilterHtml(['airfield-grass', 'airfield-gliding', 'airfield-solid']);
   expect(/id="lnd-style-outlanding"(?! checked)/.test(h)).toBe(true);
   expect(h).toContain('id="lnd-style-airfield-gliding" checked');
+});
+
+
+// ---- IHM-006: the same panel, in French ----
+
+test('the divert panel speaks French — and the English sentence is GONE, not merely joined', () => {
+  const judged = [alt('Serres', 'unreachable', -80, { limit: 'glide' })];
+  const p: DivertPanel = {
+    loaded: true, landableCount: 4, haveAlt: true, inRadius: 1,
+    radiusM: 80_000, judged, rows: judged, stale: false,
+  };
+  const french = alternatesHtmlT(p, METRIC, fr);
+  // The loudest sentence in the app, in the pilot's language — and the English one absent, which
+  // is the whole point: a warning a pilot cannot read is a warning he does not heed.
+  expect(french).toContain(fr('lnd.noneReachable'));
+  expect(french).not.toContain(NONE_REACHABLE);
+  expect(french).toContain(fr('lnd.limit.glide'));       // and the row still says WHY
+  expect(french).not.toContain('short on glide');
+  // The .cup category too: it is data in English in the kernel, and a word in French here.
+  expect(french).toContain(fr('cup.cat.airfield-gliding'));
+  expect(alternatesHtmlT(p, METRIC, en)).toContain(NONE_REACHABLE);
+});
+
+
+// ---- CFG-003: the rows read in the unit the pilot chose ----
+
+test('the divert rows honour the pilot\'s units — his margin is not in two units at once', () => {
+  // The failure this pins: the arrival box overhead read '+850 ft' while the row he actually
+  // diverts on read '+259 m', because the panel had never heard of the unit setting.
+  const judged = [alt('Serres', 'reachable', 259, { distanceM: 12_400 })];
+  const p: DivertPanel = {
+    loaded: true, landableCount: 4, haveAlt: true, inRadius: 1,
+    radiusM: 80_000, judged, rows: judged, stale: false,
+  };
+  const aviation = alternatesHtmlT(p, PRESETS.aviation, en);
+  expect(aviation).toContain('+850 ft');                 // the margin, in his altitude unit
+  expect(aviation).toContain('6.7 NM');                  // the distance, in his distance unit
+  expect(aviation).toContain('4121 ft');                 // the field's elevation, likewise
+  expect(aviation).toContain('2625 ft');                 // and the runway length
+  expect(aviation).not.toContain('+259 m');
+  expect(aviation).not.toContain('12.4 km');
+  // …and the radius in the banner sentence follows, because the sentence takes a formatted string.
+  expect(alternatesHtmlT({ ...p, inRadius: 0 }, PRESETS.aviation, en)).toContain('43 NM');
+
+  // Metric is still metric — the default did not move, it merely stopped being the only option.
+  expect(alternatesHtmlT(p, PRESETS.metric, en)).toContain('+259 m');
 });

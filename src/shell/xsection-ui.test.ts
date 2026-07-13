@@ -2,7 +2,12 @@
 // that draws unmeasured terrain as flat is the plan view's own lie, told in the one dimension
 // that was supposed to fix it.
 import { test, expect } from 'bun:test';
-import { xsectionSvg } from './xsection-ui';
+import { xsectionSvg as xsectionSvgT } from './xsection-ui';
+import { translator } from '../core/i18n';
+
+const en = translator('en');
+const xsectionSvg = (i: Parameters<typeof xsectionSvgT>[0], w?: number, h?: number): string =>
+  w == null ? xsectionSvgT(i, en) : xsectionSvgT(i, en, w, h);
 import type { ElevSampler } from 'soaring-core/ports';
 import type { Airspace } from '../core/airspace';
 

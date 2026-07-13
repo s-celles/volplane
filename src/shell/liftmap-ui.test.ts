@@ -7,9 +7,14 @@
 
 import { test, expect } from 'bun:test';
 import {
-  paintLiftMap, project, mixerSvg, mixerHit, mixerVerts, legendHtml,
+  paintLiftMap, project, mixerSvg, mixerHit, mixerVerts, legendHtml as legendHtmlT,
   WATERMARK, MIXER_PAD, type Paint2D, type View,
 } from './liftmap-ui';
+import { translator } from '../core/i18n';
+
+const en = translator('en');
+const legendHtml = (on: boolean[], map?: Parameters<typeof legendHtmlT>[2]): string =>
+  legendHtmlT(on, en, map);
 import type { LiftMap, LiftLayer, Patch } from '../core/liftmap';
 import { simplexVerts } from 'soaring-core/lift/mix';
 import { mPerLng } from 'soaring-core/geo';

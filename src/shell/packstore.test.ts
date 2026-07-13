@@ -9,6 +9,7 @@ import { memKV } from './store';
 import { Z } from './terrain';
 import { tileKey, tilesForArea, type PackSpec } from '../core/pack';
 import type { Shelf } from '../core/shelf';
+import { DEFAULT_SETTINGS } from '../core/config';
 import {
   enforceBudget,
   heldForShelf,
@@ -56,8 +57,9 @@ test('bytes that are not JSON at the shelf key still load as an empty shelf', as
 
 test('settings round-trip: what was saved comes back', async () => {
   const kv = memKV();
-  await saveSettings(kv, { cacheBudgetMB: 350, polar: null, monitoredClasses: ['C', 'D'] });
-  expect(await loadSettings(kv)).toEqual({ cacheBudgetMB: 350, polar: null, monitoredClasses: ['C', 'D'] });
+  const saved = { ...DEFAULT_SETTINGS, cacheBudgetMB: 350, monitoredClasses: ['C', 'D'] };
+  await saveSettings(kv, saved);
+  expect(await loadSettings(kv)).toEqual(saved);
 });
 
 test('garbage settings answer with the factory defaults, never a throw', async () => {

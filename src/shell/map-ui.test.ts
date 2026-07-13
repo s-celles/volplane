@@ -2,10 +2,24 @@
 // whether the range ring carried its still-air confession.
 import { test, expect } from 'bun:test';
 import {
-  paintMap, RANGE_LABEL, REACH_LABEL, UNLOADED_FILL, TERRAIN_UNLOADED_LABEL, LANDABLE_COLOR,
-  LANDABLE_SCOPE_LABEL, LANDABLES_STALE_LABEL,
+  paintMap as paintMapT, UNLOADED_FILL, LANDABLE_COLOR,
   type MapPaint2D,
 } from './map-ui';
+import { translator } from '../core/i18n';
+
+// IHM-006: the canvas labels are catalogue entries now — the claims are unchanged, the words
+// have one home. The tests read them back through the same catalogue the painter writes from.
+const en = translator('en');
+const paintMap = (
+  ctx: Parameters<typeof paintMapT>[0], view: Parameters<typeof paintMapT>[1],
+  input: Parameters<typeof paintMapT>[2],
+): void => paintMapT(ctx, view, input, en);
+const RANGE_LABEL = en('map.range');
+const REACH_LABEL = en('map.reach');
+const TERRAIN_UNLOADED_LABEL = (pct: number): string => en('map.terrainUnloaded', { pct });
+const LANDABLE_SCOPE_LABEL = (judged: number, inRadius: number, radiusM: number): string =>
+  en('map.landableScope', { judged, inRadius, dist: `${Math.round(radiusM / 1000)} km` });
+const LANDABLES_STALE_LABEL = en('map.landablesStale');
 import type { ReachRay } from '../core/reach';
 import type { Alternate, LandState } from '../core/landables';
 import type { Poi, PoiCat } from '../core/cup';

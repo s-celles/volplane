@@ -6,8 +6,13 @@
 // .plr the parser cannot fly is refused rather than persisted; a class filter that would
 // silently mute every alert becomes null (all monitored), never an empty list.
 import { test, expect } from 'bun:test';
-import { DEFAULT_POLAR } from 'soaring-core/polar';
-import { DEFAULT_SETTINGS, normalizeSettings, activePolar, fieldNumber } from './config';
+import { DEFAULT_POLAR, sinkAt, minSink } from 'soaring-core/polar';
+import {
+  DEFAULT_SETTINGS, normalizeSettings, activePolar, fieldNumber, massKgFromField, massBandKg,
+} from './config';
+import { DEFAULT_UNITS } from './units';
+import { DEFAULT_PAGES } from './infobox';
+import { GLIDER_LIBRARY, gliderById, polarOf } from './polarlib';
 
 // One CSV line in the .plr dialect parsePlr accepts: mass, ballast, then three
 // (speed, sink) points and the wing area, with a comment line to prove those survive.
@@ -89,9 +94,9 @@ test('a class list that is not an array of strings watches everything, not a fra
 
 // ---- migration: yesterday's one-field disk record costs the pilot nothing ----
 
-test('the old one-field record gains the new fields as null', () => {
+test('the old one-field record gains the new fields at their defaults', () => {
   expect(normalizeSettings({ cacheBudgetMB: 300 }))
-    .toEqual({ cacheBudgetMB: 300, polar: null, monitoredClasses: null });
+    .toEqual({ ...DEFAULT_SETTINGS, cacheBudgetMB: 300 });
 });
 
 // ---- the fields the pilot TYPES into (POT-007, TER-008) ----
@@ -121,4 +126,145 @@ test('below `min` is a value the pilot cannot have meant, so it is the default',
   expect(fieldNumber('-30', 60, 1)).toBe(60);
   expect(fieldNumber('0', 1013.25, 1)).toBe(1013.25);
   expect(fieldNumber('30', 60, 1)).toBe(30);    // above the minimum: obeyed
+});
+
+// ---- the screen the pilot made his own (IHM-001, IHM-002, CFG-002, CFG-003, CFG-005) ----
+// CFG-005: the configuration survives the restart. The record is persisted VERBATIM by packstore's
+// putJson, so the shape it comes back in has to be the shape it went out in — nothing clever, no
+// class, no Map, nothing JSON quietly flattens.
+
+test('a fresh install boots usable, and the whole record survives a JSON round-trip', () => {
+  const s = normalizeSettings({});
+  expect(s.lang).toBe('en');
+  expect(s.units).toEqual(DEFAULT_UNITS);
+  expect(s.pages).toEqual(DEFAULT_PAGES as unknown as never);
+  expect(s.pages.some(p => p.id === s.activePageId)).toBe(true);
+  expect(s.glider).toBeNull();
+  // Verbatim: what putJson writes is what the next launch reads back, unchanged.
+  expect(JSON.parse(JSON.stringify(s))).toEqual(s);
+  expect(normalizeSettings(JSON.parse(JSON.stringify(s)))).toEqual(s);
+});
+
+test('the units repair is row by row: a mangled speed costs the speed unit alone', () => {
+  const s = normalizeSettings({
+    units: { ...DEFAULT_UNITS, altitude: 'aviation', speed: 'furlongs per fortnight' },
+  });
+  expect(s.units.speed).toBe(DEFAULT_UNITS.speed);      // the bad row fell back...
+  expect(s.units.altitude).toBe('aviation');            // ...and the good row stood, in feet
+  expect(s.units.vario).toBe(DEFAULT_UNITS.vario);
+});
+
+test('a mangled language costs the language alone, never the pages', () => {
+  const mine = [{ id: 'mine', titleId: 'page.cruise', boxIds: ['mc', 'arrival'] }];
+  const s = normalizeSettings({ lang: 'klingon', pages: mine });
+  expect(s.lang).toBe('en');
+  expect(s.pages).toEqual(mine as unknown as never);
+  expect(normalizeSettings({ lang: 'fr' }).lang).toBe('fr');
+});
+
+test('an activePageId naming a page the pilot deleted falls back to the first — never to nothing', () => {
+  const s = normalizeSettings({
+    pages: [{ id: 'mine', titleId: 'page.cruise', boxIds: ['alt'] }],
+    activePageId: 'finalGlide',
+  });
+  expect(s.activePageId).toBe('mine');
+  expect(s.pages.some(p => p.id === s.activePageId)).toBe(true);
+  // And an id that does name a surviving page is obeyed.
+  expect(normalizeSettings({ activePageId: 'climb' }).activePageId).toBe('climb');
+});
+
+// ---- which polar flies (CFG-002 vs PLA-010) ----
+
+test('an imported .plr outranks a library glider — the pilot handed us HIS file', () => {
+  const s = normalizeSettings({
+    polar: { name: 'LS4', plr: LS4_PLR },
+    glider: { libId: 'ash25', massKg: 700 },
+  });
+  expect(activePolar(s).name).toBe('LS4');
+});
+
+test('with only a library glider, the library glider flies — and the mass adjustment is real', () => {
+  const s = normalizeSettings({ glider: { libId: 'ls-4a', massKg: 480 } });
+  expect(s.glider).toEqual({ libId: 'ls-4a', massKg: 480 });
+  const flown = activePolar(s);
+  expect(flown.name).toBe('LS-4a');
+  // 480 kg on an entry published at 361 kg, and the adjustment is REAL, not decorative: if massKg
+  // were being dropped on the floor these numbers would be equal. The DIRECTION is the physics,
+  // and it is worth stating because it is the opposite of what "heavier sinks more" suggests:
+  // ballast buys SPEED. At 30 m/s (108 km/h) the ballasted glider sinks LESS than the reference
+  // one — that is the whole point of carrying water — and its BEST it can ever do, the minimum
+  // sink, is worse. That pair is the physics, and it holds for every polar in the library; the
+  // speed at which the two curves cross is a property of the individual glider and is deliberately
+  // not pinned here. A settings screen that got this backwards would hand the pilot a final glide
+  // that is optimistic exactly where he is fastest and lowest.
+  const reference = polarOf(gliderById('ls-4a')!, null);
+  expect(Math.abs(sinkAt(flown, 30))).toBeLessThan(Math.abs(sinkAt(reference, 30)));
+  expect(Math.abs(minSink(flown))).toBeGreaterThan(Math.abs(minSink(reference)));
+});
+
+test('a mass nobody can have meant is not an adjustment: it is the entry reference mass', () => {
+  for (const massKg of [0, -50, 'heavy', NaN, null]) {
+    const s = normalizeSettings({ glider: { libId: 'ls-4a', massKg } });
+    expect(s.glider).toEqual({ libId: 'ls-4a', massKg: null });
+    expect(sinkAt(activePolar(s), 30)).toBe(sinkAt(polarOf(gliderById('ls-4a')!, null), 30));
+  }
+});
+
+test('a library id that no longer exists is not a glider — the default flies, and nothing throws', () => {
+  const s = normalizeSettings({ glider: { libId: 'flying-saucer', massKg: 480 } });
+  expect(s.glider).toBeNull();
+  expect(activePolar(s)).toBe(DEFAULT_POLAR);
+  expect(activePolar(normalizeSettings({ glider: 'ls-4a' }))).toBe(DEFAULT_POLAR);
+});
+
+test('with neither an import nor a library pick, the built-in default flies', () => {
+  expect(activePolar(normalizeSettings({}))).toBe(DEFAULT_POLAR);
+});
+
+// ---- CFG-002's "ajustables": the mass, in the pilot's unit, inside a band he could have meant ----
+
+test('the mass box is read in the unit the pilot chose, not in kilograms regardless', () => {
+  // The failure this pins: the settings screen offers a MASS row that can say lb, and the glider
+  // mass box beside it was read as kilograms whatever that row said. A pilot on the imperial
+  // preset typing 1058 (lb) had 1058 KG stored: k = √(1058/361) = 1.71, and every speed and sink
+  // on his polar scaled by that — a glider three times his weight flying his final glide.
+  expect(massKgFromField('480', 361, 'metric')).toBe(480);
+  expect(massKgFromField('1058', 361, 'imperial')).toBeCloseTo(479.9, 1);
+  // 'aviation' is kilograms for mass — the mixed panel is feet and knots, not pounds.
+  expect(massKgFromField('480', 361, 'aviation')).toBe(480);
+});
+
+test('a mass outside the plausible band is a typo, and it is REFUSED, not flown', () => {
+  // '45' for '450' — one dropped zero. It used to be accepted (the floor was 1 kg and there was
+  // no ceiling), persisted, and handed to atMass: k = √0.1 scales the ASK 21's polar to a curve
+  // ten times too steep whose maximum usable airspeed is 19 m/s, so every sink the computer priced
+  // for the rest of the flight was clamped at a speed the glider was not flying.
+  expect(massKgFromField('45', 450, 'metric')).toBeNull();
+  expect(massKgFromField('4500', 450, 'metric')).toBeNull();
+  // Refused, not clamped: a clamp would invent a ballast state he never typed. Null means the
+  // polar as PUBLISHED — a glider we can defend, at a mass the panel names (POT-007).
+  expect(massKgFromField('', 450, 'metric')).toBeNull();
+  expect(massKgFromField('  ', 450, 'metric')).toBeNull();
+  expect(massKgFromField('heavy', 450, 'metric')).toBeNull();
+
+  // The band itself: an empty two-seater flown solo at the bottom, full water at the top.
+  const { minKg, maxKg } = massBandKg(350);
+  expect(minKg).toBeCloseTo(245, 6);              // 0.7 × 350
+  expect(maxKg).toBeCloseTo(560, 6);              // 1.6 × 350 — a Discus 2 takes 200 litres
+  expect(massKgFromField(String(maxKg), 350, 'metric')).toBe(maxKg);
+  expect(massKgFromField(String(maxKg + 1), 350, 'metric')).toBeNull();
+  expect(massKgFromField(String(minKg), 350, 'metric')).toBe(minKg);
+  expect(massKgFromField(String(minKg - 1), 350, 'metric')).toBeNull();
+});
+
+test('a mass off DISK is repaired against the entry, not merely against zero', () => {
+  // The same 45 kg, arriving from a settings file written before the band existed. It is
+  // arithmetically fine and aeronautically impossible, and normalizeSettings is the last door.
+  const entry = GLIDER_LIBRARY[0]!;
+  const typo = normalizeSettings({ glider: { libId: entry.id, massKg: 45 } });
+  expect(typo.glider).toEqual({ libId: entry.id, massKg: null });
+  expect(sinkAt(activePolar(typo), 30)).toBe(sinkAt(polarOf(entry, null), 30));
+
+  const real = normalizeSettings({ glider: { libId: entry.id, massKg: entry.refMassKg * 1.2 } });
+  expect(real.glider).toEqual({ libId: entry.id, massKg: entry.refMassKg * 1.2 });
 });
