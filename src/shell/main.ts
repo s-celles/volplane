@@ -32,7 +32,7 @@ import {
 } from '../core/task';
 import { reachable, type ReachRay } from '../core/reach';
 import { parsePoiFile, isLandable, LANDABLE_CATS, type Poi, type PoiCat } from '../core/cup';
-import { alternates, type Alternate } from '../core/landables';
+import { alternates, landablesWithin, DEFAULT_RADIUS_M, type Alternate } from '../core/landables';
 import { alternatesHtml, styleFilterHtml } from './landables-ui';
 import { varioTone, stfTone } from '../core/vartone';
 import { barograph, effectiveGlide, climbs } from '../core/analysis';
@@ -96,8 +96,14 @@ const terrain = terrainStore(() => {
   tileEpoch++;
   // A tile arrived: the ground under the unmoved glider may just have become known. Repricing
   // costs a lookup; waiting for the next fix would show UNKNOWN over terrain we now hold.
-  const s = reground(state, elev);
-  if (s !== state) { state = s; render(state, link); }
+  state = reground(state, elev);
+  // …and the SCREEN has to be told, whether or not that reground changed anything. reground is
+  // identity-preserving when there is no fix at all, and when the ground under the glider's own
+  // pixel is unchanged — so gating the repaint on `s !== state` meant the commonest case of all
+  // (Fly screen open, no GPS attached, DEM provisioning) painted full hatch and "100% of the
+  // visible ground is NOT loaded" over terrain that was by then entirely on disk. The epoch had
+  // moved; nothing had asked the canvas to look at it. The glider's own pixel is not the map.
+  onFlyTiles();
   // The briefing has the same stake in a tile as the Fly screen: the lift map's ground and
   // the sounding's surface reference both just changed under it. Debounced — a provisioning
   // burst lands hundreds of tiles, and one re-brief at the end says all of it.
@@ -107,6 +113,19 @@ const elev = (lon: number, lat: number) => elevAtFromTiles(lon, lat, terrain.loo
 
 // Assigned once the briefing exists below; the terrain store is built before the screens are.
 let onTilesChanged: () => void = () => {};
+
+/** The Fly screen's own tile debounce, and it is a debounce for the same reason the briefing's
+ *  is: a provisioning burst lands hundreds of tiles, and repainting per tile would mean a full
+ *  render plus a hillshade recompute per tile — which is exactly what the epoch memoisation
+ *  exists to prevent. One repaint at the end says all of it. Hidden screen, no repaint: showTab
+ *  renders on entry, so nothing is owed. */
+let flyTileTimer: ReturnType<typeof setTimeout> | undefined;
+function onFlyTiles(): void {
+  clearTimeout(flyTileTimer);
+  flyTileTimer = setTimeout(() => {
+    if (!app.hidden) render(state, link);
+  }, 500);
+}
 
 // ---- the window: two tabs over the one #app ----
 
@@ -253,8 +272,13 @@ let audio: AudioOut | null = null;                 // VAR-004/005: null = silent
 // not a setting he flies by. `alts` is recomputed per render and never remembered: an
 // alternate is a claim about one position and one height, and yesterday's is a lie.
 let cup: Poi[] = [];
+let cupLandables = 0;                              // of those, the ones a glider may put a wheel on
 let styleFilter: PoiCat[] | null = null;
 let alts: Alternate[] = [];
+// What core was ASKED, so the panel and the map can both say it: how many landables lay inside
+// the judging radius, and how many of them the cost cap actually marched. Null when there is no
+// file or no fix — then no question was put, and there is nothing to disclose about it.
+let altScope: { radiusM: number; judged: number; inRadius: number } | null = null;
 const flightTrack: TrackPoint[] = [];              // ANA/CNC: the flight, for the analysis tab
 
 const setting = (id: string, fallback: number): number => {
@@ -326,7 +350,7 @@ function taskHtml(): string {
 
 /** CAR + TER-005: repaint the canvas from the current state. Called from render, cheap at
  *  1 Hz — the reach march is 72 bearings over a cached tile lookup. */
-function repaintMap(s: NavState): void {
+function repaintMap(s: NavState, stale: boolean): void {
   const canvasEl = app.querySelector<HTMLCanvasElement>('#map');
   if (!canvasEl) return;
   const ctx = canvasEl.getContext('2d') as unknown as MapPaint2D;
@@ -359,6 +383,12 @@ function repaintMap(s: NavState): void {
     // The same list, on the map and in the panel — two pictures of one verdict, never two
     // verdicts of one field.
     landables: visibleAlts(alts),
+    // …and the same disclosure. The rings are only the fields core was ASKED about; the scope
+    // says so, and says how many it was not asked about, so that a bare corner of a zoomed-out
+    // map cannot pass for a corner with no fields in it.
+    landableScope: altScope,
+    // SYS-002: the rings age with the link, exactly as the boxes do.
+    stale,
   });
 
   // ANA-002: the slice straight ahead — the dimension the plan view flattens away.
@@ -385,7 +415,7 @@ function repaintMap(s: NavState): void {
  *  reserve is the SAME #set-reserve the reach polygon and the final glide keep: one reserve,
  *  one spelling, and a pilot who lowers it lowers it everywhere at once. */
 function computeAlternates(s: NavState): Alternate[] {
-  if (!cup.length || s.fix?.alt == null) return [];
+  if (!cup.length || !s.fix || s.fix.alt == null) return [];
   const w = estimator.estimate() ?? s.reportedWind ?? null;
   // NO type filter goes down into core, and the reason is a confirmed review finding: a field
   // excluded from the JUDGING is a field the "NO landable field within reach" banner would then
@@ -424,8 +454,15 @@ function render(s: NavState, link: LinkState): void {
   // instrument's last position as current is the failure mode this class exists to prevent.
   const stale = link.state === 'silent' || link.state === 'closed';
   // Judged BEFORE the screen is written, so the panel and the map (repaintMap, below) are two
-  // views of one computation rather than two computations that happen to agree today.
+  // views of one computation rather than two computations that happen to agree today. The SCOPE
+  // is computed here too, and it travels with them: core marches only the nearest fields inside
+  // its radius, and the number it did not march is not a footnote — it is the difference between
+  // "nothing is reachable" and "nothing I looked at is reachable".
   alts = computeAlternates(s);
+  const inRadius = s.fix ? landablesWithin(cup, s.fix.lon, s.fix.lat).length : 0;
+  altScope = cup.length && s.fix
+    ? { radiusM: DEFAULT_RADIUS_M, judged: alts.length, inRadius }
+    : null;
   flyView.innerHTML = `
     <div class="boxes${stale ? ' stale' : ''}">
       ${box('Latitude', fmt(s.fix?.lat, 5), '°')}
@@ -450,13 +487,22 @@ function render(s: NavState, link: LinkState): void {
     ${flarmHtml(s)}
     ${airspaceHtml(s)}
     ${taskHtml()}
-    <div id="alternates">${alternatesHtml(visibleAlts(alts))}</div>
+    <div id="alternates">${alternatesHtml({
+      loaded: cup.length > 0,
+      landableCount: cupLandables,
+      haveAlt: s.fix?.alt != null,
+      inRadius,
+      radiusM: DEFAULT_RADIUS_M,
+      judged: alts,                 // the banner speaks for THIS, never for the filtered rows
+      rows: visibleAlts(alts),
+      stale,
+    })}</div>
     <div class="link ${link.state}">Link: ${link.state}${
       link.state === 'closed' && link.error ? ` — ${link.error}` : ''
     }${stale ? ' — values are the LAST RECEIVED, not current' : ''}${
       journal?.lastError ? ` — journal writes failing (${journal.lastError}): a crash now loses the whole flight` : ''}</div>
   `;
-  repaintMap(s);
+  repaintMap(s, stale);
 }
 
 (app.querySelector('#connect') as HTMLFormElement).onsubmit = e => {
@@ -500,8 +546,11 @@ function adoptCup(text: string): string | null {
   const f = parsePoiFile(text);
   if (f.pois.length === 0) return null;
   cup = f.pois;
-  const landable = f.pois.filter(p => isLandable(p.cat)).length;
-  return `${f.pois.length} points, ${landable} landable${
+  // Counted once, here, and remembered: the panel needs it to tell "this file has no landable in
+  // it" (a turnpoint file, which this app happily accepts) apart from "this file's landables are
+  // all out of reach". Rendering the second sentence for the first case would be its own lie.
+  cupLandables = f.pois.filter(p => isLandable(p.cat)).length;
+  return `${f.pois.length} points, ${cupLandables} landable${
     f.refused ? `, ${f.refused} rows refused` : ''}`;
 }
 (app.querySelector('#cup') as HTMLInputElement).onchange = async e => {
@@ -1347,6 +1396,12 @@ function showTab(which: 'fly' | 'briefing' | 'analysis'): void {
   tabBf.classList.toggle('active', which === 'briefing');
   tabAna.classList.toggle('active', which === 'analysis');
   if (which === 'analysis') renderAnalysis();
+  // Screen entry re-measures here too, and for the same reason the briefing does (OFF-010): tiles
+  // land while this screen is hidden — a whole pack's worth, if the pilot went to the Briefing tab
+  // to provision one — and onFlyTiles deliberately does not repaint a hidden canvas. Coming back
+  // to a map still hatched over ground now on disk would be the epoch mechanism defeated at the
+  // last step.
+  if (which === 'fly') render(state, link);
   if (which === 'briefing') {
     // The form opens already pointed at where the glider is — prefilled from the last fix,
     // but only into EMPTY inputs: a centre the pilot typed is the pilot's.

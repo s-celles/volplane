@@ -11,7 +11,7 @@ import { DEFAULT_POLAR as PL } from 'soaring-core/polar';
 import { distM, mPerLng } from 'soaring-core/geo';
 import type { ElevSampler } from 'soaring-core/ports';
 import type { Poi, PoiCat } from './cup';
-import { alternates, reachableOnly, NONE_REACHABLE } from './landables';
+import { alternates, landablesWithin, reachableOnly, NONE_REACHABLE } from './landables';
 
 const LON = 8, LAT = 47;
 const eastM = (m: number): number => LON + m / mPerLng(LAT);
@@ -51,6 +51,13 @@ test('the field behind the ridge is refused, lower and nearer though it be (LND-
   // has the height for 12 km ten times over, and it still cannot have that field.
   expect(b.state).toBe('unreachable');
   expect(b.limit).toBe('terrain');
+
+  // And the refusal comes with NO NUMBER, which this test used to let slide — the defect a
+  // review found. The straight-line arithmetic, which knows nothing of the wall, makes this
+  // field out to be +761 m in hand, and the panel printed that in the margin column: bold,
+  // tabular, the most prominent number in a red row. "Height in hand on arrival" over ground
+  // there is no arriving at. A margin is only a margin when the glide was flyable (POT-007).
+  expect(b.marginM).toBeNull();
 
   expect(o.state).toBe('reachable');
   expect(o.marginM!).toBeGreaterThan(0);
@@ -127,6 +134,28 @@ test('LND-006: with nothing in reach the list still speaks — it does not shrug
   expect(list[0].marginM!).toBeGreaterThan(list[1].marginM!);
 });
 
+test('LND-004: a ridge is not a near miss — the blocked field sinks below the one short by 40 m', () => {
+  // The ordering inside the unreachable bucket exists because "short by 40 m" and "short by
+  // 1400 m" are different plans. A mountain is neither: no climb makes the ground behind that
+  // wall reachable on this glide. It used to sort FIRST — its fabricated free-air margin (+761 m)
+  // beat the honest negative of a field that was genuinely nearly makeable, so the top of the
+  // divert list's second bucket was ranked by a number that measured nothing.
+  const blocked = pt('BLOCKED', 'airfield-gliding', 12_000, 400);   // behind the 2200 m wall
+  const short = pt('SHORT', 'airfield-grass', -45_000, 500);        // west, open, just out of glide
+  const list = alternates(valley, LON, LAT, 1700, [blocked, short], PL, { stepM: 100 });
+
+  expect(list.map(a => a.state)).toEqual(['unreachable', 'unreachable']);
+  const [first, second] = list;
+
+  expect(first.point.name).toBe('SHORT');
+  expect(first.limit).toBe('glide');
+  expect(first.marginM!).toBeLessThan(0);          // a measured shortfall: a plan, if he finds a climb
+
+  expect(second.point.name).toBe('BLOCKED');
+  expect(second.limit).toBe('terrain');
+  expect(second.marginM).toBeNull();               // and above all: never a positive number
+});
+
 test('LND-008 is NOT core\'s business: core judges EVERY landable, always', () => {
   // A review finding put this rule here, and it is the kind that only shows up in the field: a
   // field excluded from the JUDGING is a field the "NO landable field within reach" banner then
@@ -136,6 +165,44 @@ test('LND-008 is NOT core\'s business: core judges EVERY landable, always', () =
   const pts = [pt('GLIDING', 'airfield-gliding', 6_000, 0), pt('OUTLANDING', 'outlanding', 3_000, 0)];
   const all = alternates(flat, LON, LAT, 2000, pts, PL, { stepM: 200 });
   expect(all.map(a => a.point.name).sort()).toEqual(['GLIDING', 'OUTLANDING']);
+});
+
+test('the cost cap is COUNTABLE: what it dropped can be seen, not merely dropped', () => {
+  // The cap marches the 30 NEAREST fields, and reachability is not monotonic in distance — the
+  // headline test at the top of this file is precisely a nearer field refused for rock. So in an
+  // Alpine valley the 30 nearest can all be behind ridges while the 31st, straight down the valley
+  // axis, is reachable with 400 m in hand. It is absent from the list, absent from the map, and the
+  // panel used to shout "NO landable field within reach" without a word about the 30-of-31 it had
+  // actually asked about. The cap stays (it is a real cost bound), but it is now VISIBLE: the shell
+  // renders "N of M judged" and softens the banner. landablesWithin is that M.
+  const behind = Array.from({ length: 30 }, (_, i) =>
+    pt(`W${i}`, 'airfield-gliding', 9_000 + i * 300, 400));      // all past the 8.0–8.6 km wall
+  const open = pt('OPEN', 'airfield-grass', -25_000, 500);       // 25 km west, clear valley
+  const pts = [...behind, open];
+
+  const capped = alternates(valley, LON, LAT, 1700, pts, PL, { stepM: 100 });
+  expect(capped).toHaveLength(30);                               // the cap bit…
+  expect(reachableOnly(capped)).toHaveLength(0);                 // …and it took the only field there was
+
+  // The denominator the shell needs in order not to lie about that: 31 were in range, 30 were asked.
+  expect(landablesWithin(pts, LON, LAT)).toHaveLength(31);
+  expect(landablesWithin(pts, LON, LAT).length).toBeGreaterThan(capped.length);
+
+  // And with the budget raised, the field is there and reachable — proof the cap, not the terrain,
+  // is what hid it.
+  const all = alternates(valley, LON, LAT, 1700, pts, PL, { stepM: 100, maxFields: 100 });
+  expect(reachableOnly(all).map(a => a.point.name)).toEqual(['OPEN']);
+});
+
+test('landablesWithin counts landables, and only the ones inside the radius', () => {
+  const pts = [
+    pt('NEAR', 'airfield-gliding', 5_000, 0),
+    pt('EDGE', 'outlanding', 79_000, 0),
+    pt('BEYOND', 'airfield-grass', 120_000, 0),   // outside the 80 km default
+    pt('TURN', 'waypoint', 1_000, 0),             // not a field at all (LND-001)
+  ];
+  expect(landablesWithin(pts, LON, LAT).map(p => p.name)).toEqual(['NEAR', 'EDGE']);
+  expect(landablesWithin(pts, LON, LAT, 10_000).map(p => p.name)).toEqual(['NEAR']);
 });
 
 test('LND-005 / C3: no modelled field can widen a landing option, and the imports prove it', () => {

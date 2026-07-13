@@ -3,6 +3,7 @@
 import { test, expect } from 'bun:test';
 import {
   paintMap, RANGE_LABEL, REACH_LABEL, UNLOADED_FILL, TERRAIN_UNLOADED_LABEL, LANDABLE_COLOR,
+  LANDABLE_SCOPE_LABEL, LANDABLES_STALE_LABEL,
   type MapPaint2D,
 } from './map-ui';
 import type { ReachRay } from '../core/reach';
@@ -211,4 +212,59 @@ test('an indeterminate field is never painted as reachable (LND-003)', () => {
   expect(marks.filter(c => c === LANDABLE_COLOR.reachable)).toHaveLength(1);
   expect(texts).toContain('REACHABLE');          // only the top reachable field is named
   expect(texts).not.toContain('UNMEASURED');
+});
+
+// ---- LND-002: the layer draws what was ASKED, and says where the asking stopped ----
+
+test('the landable layer states its own boundary — a bare corner is "not asked", not "nothing there"', () => {
+  // The rings only ever cover the fields core marched: the nearest few, inside a search radius
+  // that is a COST bound. Zoom out to 200 km with a French .cup and the outer half of the frame is
+  // empty of rings while being full of airfields the file knows about — and the layer LOOKS
+  // authoritative, so the pilot reads that emptiness as an answer. It is not one.
+  const { ctx, texts, strokes } = recorder();
+  paintMap(ctx, view, {
+    ...base,
+    landables: [field('SERRES', 8.01, 'reachable')],
+    landableScope: { radiusM: 80_000, judged: 30, inRadius: 52 },
+  });
+
+  expect(texts).toContain(LANDABLE_SCOPE_LABEL(30, 52, 80_000));
+  expect(texts.some(t => t.includes('30 of 52'))).toBe(true);   // the number, not just a hint
+  expect(strokes).toContain(LANDABLE_COLOR.indeterminate);      // the boundary, in the unmeasured grey
+});
+
+test('no scope, no claim: a map with no landable question asked draws no boundary', () => {
+  const { ctx, texts } = recorder();
+  paintMap(ctx, view, { ...base, landables: [field('SERRES', 8.01, 'reachable')] });
+  expect(texts.some(t => t.includes('judged within'))).toBe(false);
+});
+
+// ---- SYS-002: the rings age with the link ----
+
+test('a stale fix dims the rings and withdraws the name — an offer is not made from an old fix', () => {
+  // Naming the top reachable field is an OFFER. Made from a fix that stopped arriving two minutes
+  // ago, it is an offer about a position and a height the glider no longer has. The verdicts keep
+  // their colours (a thing that WAS measured is not unmeasured now — repainting them grey would
+  // collapse them into 'indeterminate', which means something else), but they stop looking current.
+  const { ctx, texts } = recorder();
+  paintMap(ctx, view, {
+    ...base,
+    landables: [field('SERRES', 8.01, 'reachable')],
+    landableScope: { radiusM: 80_000, judged: 1, inRadius: 1 },
+    stale: true,
+  });
+
+  expect(texts).toContain(LANDABLES_STALE_LABEL);
+  expect(texts).not.toContain('SERRES');          // the offer is withdrawn, not merely faded
+});
+
+test('a live link names the top field and says nothing about staleness', () => {
+  const { ctx, texts } = recorder();
+  paintMap(ctx, view, {
+    ...base,
+    landables: [field('SERRES', 8.01, 'reachable')],
+    landableScope: { radiusM: 80_000, judged: 1, inRadius: 1 },
+  });
+  expect(texts).toContain('SERRES');
+  expect(texts).not.toContain(LANDABLES_STALE_LABEL);
 });

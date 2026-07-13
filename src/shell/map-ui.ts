@@ -45,6 +45,17 @@ export interface MapInput {
   terrain?: { elev: ElevSampler; epoch: number } | null;
   /** LND-002/003: the landables, already judged by core. The painter judges nothing. */
   landables?: readonly Alternate[] | null;
+  /** LND-002, and the reason a bare corner of this map is not evidence: the landable layer only
+   *  ever shows the fields core was ASKED about — the nearest few, inside a search radius that
+   *  is a COST bound. Zoom out to a 200 km frame with a French .cup and the outer half of the
+   *  screen is empty of rings while being full of airfields the file knows perfectly well. The
+   *  layer looks authoritative — green/red/grey verdict rings, the top field named — so the eye
+   *  reads that emptiness as "nothing there" rather than "nobody asked". So the question's own
+   *  boundary is drawn, and its count is said out loud. */
+  landableScope?: { radiusM: number; judged: number; inRadius: number } | null;
+  /** SYS-002: the fix everything here was computed from is the LAST one received, not a current
+   *  one. The rings are a claim about ONE position and ONE height, and both have aged. */
+  stale?: boolean;
 }
 
 export const RANGE_LABEL = 'range: still air, no wind';
@@ -59,6 +70,19 @@ export const UNLOADED_FILL = '#1c222b';
  *  that is 40% guesswork must SAY it is 40% guesswork; the hatch alone is a hint, the number is
  *  the confession. */
 export const TERRAIN_UNLOADED_LABEL = (pct: number) => `${pct}% of the visible ground is NOT loaded`;
+
+/** The judging boundary, said out loud, in the same voice. The circle alone would be a mark the
+ *  pilot has to interpret; the sentence is what makes the empty ground outside it read as an
+ *  unasked question rather than as an answer. */
+export const LANDABLE_SCOPE_LABEL = (judged: number, inRadius: number, radiusM: number): string =>
+  `fields: ${judged} of ${inRadius} judged within ${Math.round(radiusM / 1000)} km — none drawn beyond`;
+
+/** SYS-002 on the canvas. The rings keep their colours — a verdict that WAS measured is not
+ *  unmeasured now, and repainting them grey would collapse them into 'indeterminate', which in
+ *  this app means something else entirely ("judged, DEM silent"). They are dimmed and captioned
+ *  instead, and the top field is no longer NAMED: naming one field is an offer, and an offer made
+ *  from a fix that may be minutes old is exactly the promise SYS-002 exists to withdraw. */
+export const LANDABLES_STALE_LABEL = 'fields: judged at the LAST fix, not from now';
 
 /** LND-003's three states, deliberately wearing the same three colours the reach polygon already
  *  uses for glide / terrain / unknown. One visual vocabulary for one distinction, learnt once:
@@ -157,9 +181,11 @@ function paintTerrain(ctx: MapPaint2D, view: View, terrain: { elev: ElevSampler;
  *  core judged, the painter paints. The type is read from the ring: a gliding airfield is filled,
  *  an outlanding field is hollow. Only the TOP reachable field is named, because the map is not
  *  the alternates list; the panel is, and a map with thirty names on it is a map with none. */
-function paintLandables(ctx: MapPaint2D, view: View, landables: readonly Alternate[]): void {
+function paintLandables(
+  ctx: MapPaint2D, view: View, landables: readonly Alternate[], stale: boolean,
+): void {
   ctx.lineWidth = 1.5;
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = stale ? 0.4 : 1;
   let named = false;
 
   for (const a of landables) {
@@ -175,13 +201,38 @@ function paintLandables(ctx: MapPaint2D, view: View, landables: readonly Alterna
       ctx.arc(x, y, 2, 0, 2 * Math.PI);
       ctx.fill();
     }
-    if (!named && a.state === 'reachable') {
+    if (!stale && !named && a.state === 'reachable') {
       named = true;
       ctx.fillStyle = colour;
       ctx.font = '11px system-ui, sans-serif';
       ctx.fillText(a.point.name, x + 9, y + 4);
     }
   }
+  ctx.globalAlpha = 1;
+}
+
+/** The boundary of the question. Everything the landable layer drew lies inside this circle, and
+ *  the ground outside it was not judged — not judged and found wanting, not judged at all. The
+ *  circle is drawn in the same grey as 'indeterminate' on purpose: unasked and unmeasured are the
+ *  same kind of nothing, and this app has exactly one colour for that. */
+function paintLandableScope(
+  ctx: MapPaint2D, view: View, at: { lon: number; lat: number },
+  scope: { radiusM: number; judged: number; inRadius: number }, stale: boolean,
+): void {
+  const [x, y] = project(view, at.lon, at.lat);
+  ctx.strokeStyle = LANDABLE_COLOR.indeterminate;
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.35;
+  ctx.beginPath();
+  ctx.arc(x, y, scope.radiusM * view.wPx / view.widthM, 0, 2 * Math.PI);
+  ctx.stroke();
+
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = '#8b93a1';
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.fillText(LANDABLE_SCOPE_LABEL(scope.judged, scope.inRadius, scope.radiusM), 8, view.hPx - 24);
+  if (stale) ctx.fillText(LANDABLES_STALE_LABEL, 8, view.hPx - 40);
+  ctx.globalAlpha = 1;
 }
 
 /** The reach edge's colour says WHY it ends there — the TER-005 distinction, carried to the
@@ -195,7 +246,10 @@ const LIMIT_COLOR: Record<ReachRay['limit'], string> = {
 
 /** Paint the map, centred on the glider (or the view centre when there is no fix yet). */
 export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
-  const { state: s, trail, spaces, traffic, goal, rangeM, reach, terrain, landables } = input;
+  const {
+    state: s, trail, spaces, traffic, goal, rangeM, reach, terrain, landables,
+    landableScope, stale = false,
+  } = input;
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#10141a';
   ctx.fillRect(0, 0, view.wPx, view.hPx);
@@ -280,8 +334,10 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput): void {
   }
 
   // The fields, over the trail and under the glider: they belong to the ground, but the glider
-  // must never be hidden by one.
-  if (landables && landables.length > 0) paintLandables(ctx, view, landables);
+  // must never be hidden by one. And the boundary of what was asked goes down with them — the
+  // rings and their scope are one statement, and half of it drawn alone is the half that misleads.
+  if (landables && landables.length > 0) paintLandables(ctx, view, landables, stale);
+  if (landableScope && s.fix) paintLandableScope(ctx, view, s.fix, landableScope, stale);
 
   if (s.fix) {
     const [x, y] = project(view, s.fix.lon, s.fix.lat);

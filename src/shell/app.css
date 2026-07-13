@@ -105,6 +105,23 @@ button { cursor: pointer; }
    incursion, because it is the same class of fact — something the pilot must act on now. */
 .lnd-none { padding: .4rem .6rem; border-radius: .35rem; background: rgba(224, 82, 82, .22); color: var(--bad); font-weight: 700; letter-spacing: .03em; }
 
+/* The three sentences that are NOT that one, and the whole point of them is that they do not
+   look like it. "Terrain not loaded" is an unasked question, not a refusal; it wears the grey of
+   every other unmeasured thing in this app, because the day it borrows the red banner's clothes
+   is the day the red banner starts being ignored — and it is the one banner that must never be
+   ignored. The scope line is quieter still: it is a footnote about what was asked, not news. */
+.lnd-unknown { padding: .4rem .6rem; border-radius: .35rem; background: rgba(139, 147, 161, .14); color: var(--dim); font-weight: 600; }
+.lnd-note { padding: .4rem .6rem; color: var(--dim); font-size: .8rem; }
+.lnd-scope { padding: .2rem .6rem; color: var(--dim); font-size: .75rem; font-style: italic; }
+
+/* SYS-002: the divert rows are DERIVED from the fix — a "reachable, +240 m" is a claim about one
+   position and one height — so when the link dies they age exactly as the boxes above them do.
+   They stay legible (a pilot mid-diversion must not lose his list) and they stop looking current:
+   dimmed, and captioned with what happened. The caption is warm, not red: the news is that the
+   INSTRUMENT stopped talking, not that the fields went away. */
+.lnd-stale { padding: .3rem .6rem; color: var(--warn); font-size: .8rem; font-weight: 600; }
+.landables.stale .lnd-row { opacity: .5; }
+
 /* LND-008: the type filter. A view control, so it looks like one — quiet, beside the picker,
    nothing like the rows it filters. */
 .lnd-filter { display: inline-flex; flex-wrap: wrap; gap: .5rem; margin-left: .3rem; }
