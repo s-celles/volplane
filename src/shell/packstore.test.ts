@@ -83,6 +83,49 @@ test('a stored flight file comes back byte-identical, and kinds do not bleed', a
   expect(await loadFlightFile(kv, 'task')).toBeNull();
 });
 
+// ---- the .cup, which must survive a restart like the rest (OFF-002, LND-001) ----
+
+test('the loaded .cup comes back verbatim after a restart, quotes and accents and all', async () => {
+  const kv = memKV();
+  // A real .cup row: the quoted name with a comma inside it is exactly the byte sequence a
+  // "helpful" normalization would break, and parseCup is the only thing allowed to interpret it.
+  const cup = {
+    name: 'alps.cup',
+    text: 'name,code,country,lat,lon,elev,style,rwdir,rwlen,freq,desc\r\n'
+      + '"CHATEAU-ARNOUX, ST AUBAN",STAUB,FR,4405.783N,00559.617E,459.0m,5,170,1400.0m,"118.500","Vol à voile"\r\n',
+  };
+  await saveFlightFile(kv, 'landables', cup);
+  expect(await loadFlightFile(kv, 'landables')).toEqual(cup);
+});
+
+test('a .cup never loaded is null, not an empty file the parser would read as zero fields', async () => {
+  expect(await loadFlightFile(memKV(), 'landables')).toBeNull();
+});
+
+test('a corrupted .cup record answers null, never a throw — the pilot loses the file, not his startup', async () => {
+  const kv = memKV();
+  await kv.put('flight/landables', new TextEncoder().encode('{not json at all'));
+  expect(await loadFlightFile(kv, 'landables')).toBeNull();
+
+  // Half a record is not a file the pilot chose: a name with no text is as absent as nothing.
+  await kv.put('flight/landables', new TextEncoder().encode('{"name":"alps.cup"}'));
+  expect(await loadFlightFile(kv, 'landables')).toBeNull();
+});
+
+test('the three flight files live in three keys: writing one leaves the others standing', async () => {
+  const kv = memKV();
+  const air = { name: 'france.txt', text: 'AC D\nAN TMA\n' };
+  const task = { name: 'triangle.tsk', text: 'STAUB,SERRE,ASPRE\n' };
+  await saveFlightFile(kv, 'airspace', air);
+  await saveFlightFile(kv, 'task', task);
+
+  await saveFlightFile(kv, 'landables', { name: 'alps.cup', text: 'x' });
+
+  expect(await loadFlightFile(kv, 'airspace')).toEqual(air);
+  expect(await loadFlightFile(kv, 'task')).toEqual(task);
+  expect(await loadFlightFile(kv, 'landables')).toEqual({ name: 'alps.cup', text: 'x' });
+});
+
 // ---- heldForShelf (OFF-009) ----
 
 test('heldForShelf measures each pack under its own id', async () => {

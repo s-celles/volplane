@@ -79,6 +79,37 @@ button { cursor: pointer; }
 /* ---- PLA-010: the name of the polar that flies, beside its picker ---- */
 .polar-label { font-size: .85rem; color: var(--dim); }
 
+/* ---- LND: the alternates. Three states, and the SAME three colours the reach polygon and the
+   map's landable rings already speak — one vocabulary, learnt once: green is ground you can
+   have, red is ground you cannot, grey is ground nobody has measured.
+
+   The grey is the one that had to be got right. An indeterminate field is not a slightly worse
+   green: it is an unasked question, and the row must never read as an offer. So it is the
+   DIMMEST thing in the panel — no background, faded text — while the two rows that carry a real
+   measurement are the ones that catch the eye. If a designer ever brightens this rule to "make
+   the list look consistent", the panel starts inviting final glides to fields whose ground the
+   DEM never answered for, and the pilot finds that out at 200 ft. ---- */
+.landables { margin-top: .75rem; font-size: .85rem; }
+.lnd-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; padding: .3rem .6rem; border-radius: .35rem; margin-top: .2rem; font-variant-numeric: tabular-nums; }
+.lnd-row .lnd-name { font-weight: 600; min-width: 9rem; }
+.lnd-row .lnd-style, .lnd-row .lnd-elev, .lnd-row .lnd-rwy, .lnd-row .lnd-freq { color: var(--dim); font-size: .8rem; }
+.lnd-row .lnd-margin { font-weight: 700; min-width: 4.5rem; }
+.lnd-row .lnd-why { font-style: italic; font-size: .8rem; }
+
+.lnd-row.lnd-reachable { background: rgba(76, 175, 120, .15); color: var(--ok); }
+.lnd-row.lnd-out-of-reach { background: rgba(224, 82, 82, .15); color: var(--bad); }
+.lnd-row.lnd-indeterminate { background: none; color: var(--dim); opacity: .65; }
+.lnd-row.lnd-indeterminate .lnd-margin { font-weight: 400; }
+
+/* LND-006: the worst news of the flight, and it is allowed to shout. Same red as an airspace
+   incursion, because it is the same class of fact — something the pilot must act on now. */
+.lnd-none { padding: .4rem .6rem; border-radius: .35rem; background: rgba(224, 82, 82, .22); color: var(--bad); font-weight: 700; letter-spacing: .03em; }
+
+/* LND-008: the type filter. A view control, so it looks like one — quiet, beside the picker,
+   nothing like the rows it filters. */
+.lnd-filter { display: inline-flex; flex-wrap: wrap; gap: .5rem; margin-left: .3rem; }
+.lnd-filter-box { font-size: .8rem; color: var(--dim); }
+
 /* ---- SYS-001: a flight pulled back from a crash. Warning colours: this is the only copy,
    and the banner exists to make the pilot decide its fate on purpose. ---- */
 .recovered-banner { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .75rem 0; padding: .5rem .75rem; border-radius: .5rem; background: rgba(224, 160, 48, .15); color: var(--warn); font-size: .9rem; font-weight: 600; }

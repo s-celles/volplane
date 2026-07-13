@@ -145,8 +145,17 @@ export function reachableTo(
   const bearing = bearingTo(lon, lat, goal.lon, goal.lat);
   const dist = flatDist(lon, lat, goal.lon, goal.lat);
   const ray = reachOnBearing(elev, lon, lat, alt, polar, bearing, { ...o, maxM: Math.max(dist, 1) });
-  if (ray.limit === 'unknown' && ray.distanceM < dist) {
+  const short = ray.distanceM < dist;
+  if (short && ray.limit === 'unknown') {
     return { reachable: false, limit: 'unknown', marginM: null };
+  }
+  // A ridge stopped the march, so there IS no arrival: the ground behind that wall cannot be
+  // had at any height, and the straight-line arithmetic below — which knows nothing of the
+  // mountain — would hand back a cheerful "+900 m in hand" over it. That number is not small,
+  // not conservative and not a margin: it is a measurement of a glide nobody can fly. The
+  // caller gets the fact (terrain) and no number, because none exists (POT-007).
+  if (short && ray.limit === 'terrain') {
+    return { reachable: false, limit: 'terrain', marginM: null };
   }
   // The margin is what is left over the GOAL's own ground once the glide is flown — the
   // number the arrival box shows, but now earned against every metre of ground in between.

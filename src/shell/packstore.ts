@@ -25,13 +25,14 @@ import { Z } from './terrain';
 
 // ---- the key layout ----
 // Flat keys, hierarchy spelled with prefixes — store.ts's own convention. Singletons get a
-// bare word; the two flight files share the 'flight/' prefix so keys('flight/') enumerates
-// them, the same way 'tile/' enumerates the terrain cache.
+// bare word; the flight files share the 'flight/' prefix so keys('flight/') enumerates them,
+// the same way 'tile/' enumerates the terrain cache. Each kind owns one key, so a new kind
+// costs one word here and collides with nothing.
 
 export const SHELF_KEY = 'shelf';
 export const SETTINGS_KEY = 'settings';
 
-export type FlightFileKind = 'airspace' | 'task';
+export type FlightFileKind = 'airspace' | 'task' | 'landables';
 export const flightFileKey = (kind: FlightFileKind): string => `flight/${kind}`;
 
 // ---- the shelf record (OFF-002) ----
@@ -69,12 +70,18 @@ export async function saveSettings(kv: KV, s: Settings): Promise<void> {
   await putJson(kv, SETTINGS_KEY, s);
 }
 
-// ---- flight files: airspace and task (OFF-002) ----
+// ---- flight files: airspace, task, landables (OFF-002) ----
 
 /** A file the pilot loaded, kept as the RAW text plus the name it arrived under. Raw, not
  *  parse results, for the same reason provision.ts stores the raw wx payload: parsing belongs
  *  to the reader, and raw bytes cannot rot when parseOpenAir improves. The name is not
- *  decoration — it is how the pilot recognises, next season, which airspace file this is. */
+ *  decoration — it is how the pilot recognises, next season, which airspace file this is.
+ *
+ *  The .cup joins them on exactly those terms (LND-001). Storing the parsed CupPoints instead
+ *  would freeze today's parseCup into the pilot's disk: the day it learns to read a coordinate
+ *  format it used to refuse, every field already stored stays refused, and the pilot who
+ *  loaded his waypoints last season would never know which ones went missing. Raw text cannot
+ *  rot that way — it is re-parsed, wholly, by whatever reader is current at startup. */
 export interface FlightFile {
   name: string;
   text: string;

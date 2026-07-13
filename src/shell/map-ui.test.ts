@@ -1,8 +1,13 @@
 // The map painter against a recording context: what reached the canvas, in what colour, and
 // whether the range ring carried its still-air confession.
 import { test, expect } from 'bun:test';
-import { paintMap, RANGE_LABEL, REACH_LABEL, type MapPaint2D } from './map-ui';
+import {
+  paintMap, RANGE_LABEL, REACH_LABEL, UNLOADED_FILL, TERRAIN_UNLOADED_LABEL, LANDABLE_COLOR,
+  type MapPaint2D,
+} from './map-ui';
 import type { ReachRay } from '../core/reach';
+import type { Alternate, LandState } from '../core/landables';
+import type { Poi, PoiCat } from '../core/cup';
 import { EMPTY, type NavState } from '../core/nav';
 import type { View } from './liftmap-ui';
 
@@ -10,20 +15,28 @@ function recorder() {
   const ops: string[] = [];
   const texts: string[] = [];
   const strokes: string[] = [];               // the colour each stroke went out in
+  const fills: string[] = [];                 // …and each fill/fillRect
   const ctx: MapPaint2D = {
     fillStyle: '', strokeStyle: '', globalAlpha: 1, lineWidth: 1, font: '',
-    fillRect: () => ops.push('fillRect'),
+    fillRect: () => { ops.push('fillRect'); fills.push(ctx.fillStyle); },
     fillText: (t: string) => { ops.push('fillText'); texts.push(t); },
     beginPath: () => ops.push('beginPath'),
     moveTo: () => ops.push('moveTo'),
     lineTo: () => ops.push('lineTo'),
     arc: () => ops.push('arc'),
     stroke: () => { ops.push('stroke'); strokes.push(ctx.strokeStyle); },
-    fill: () => ops.push('fill'),
+    fill: () => { ops.push('fill'); fills.push(ctx.fillStyle); },
     closePath: () => ops.push('closePath'),
   };
-  return { ctx, ops, texts, strokes };
+  return { ctx, ops, texts, strokes, fills };
 }
+
+/** A landable, already judged by core — the painter is never allowed to re-judge one. */
+const point = (name: string, lon: number, cat: PoiCat): Poi =>
+  ({ name, code: name, country: 'FR', lon, lat: 47, elevM: 500, cat, rwdirDeg: null, rwlenM: null, freq: null, desc: '', raw: null });
+
+const field = (name: string, lon: number, state: LandState, cat: PoiCat = 'outlanding'): Alternate =>
+  ({ point: point(name, lon, cat), state, marginM: state === 'indeterminate' ? null : 300, distanceM: 4000, bearingDeg: 90, limit: 'glide' });
 
 /** A reach polygon whose bearings end for the three different reasons. */
 const ray = (bearing: number, limit: ReachRay['limit']): ReachRay =>
@@ -105,4 +118,97 @@ test('airspace, trail, traffic and goal each reach the canvas', () => {
   });
   expect(ops.filter(o => o === 'stroke').length).toBeGreaterThanOrEqual(3);   // space + trail + goal
   expect(ops.filter(o => o === 'fill').length).toBeGreaterThanOrEqual(2);     // glider + traffic dot
+});
+
+// ---- TER-001: the ground ----
+
+const base = { state: fix, trail: [] as [number, number][], spaces: [], traffic: [], goal: null, rangeM: null };
+const flat = { elev: () => 800, epoch: 1 };
+const nothing = { elev: () => null, epoch: 1 };
+
+test('the map paints the ground before it paints anything on it (TER-001)', () => {
+  const { ctx, ops } = recorder();
+  paintMap(ctx, view, {
+    ...base, terrain: flat,
+    spaces: [{ name: 'T', class: 'D', floor: null, ceiling: null, polygon: [[7.9, 46.9], [8.1, 46.9], [8.1, 47.1]] }],
+  });
+  // Background, then a raster of cells, and only THEN the first line drawn over it. A ridge
+  // painted on top of the airspace it is supposed to lie under is a ridge nobody sees.
+  expect(ops[0]).toBe('fillRect');
+  const firstStroke = ops.indexOf('stroke');
+  const rectsBefore = ops.slice(0, firstStroke).filter(o => o === 'fillRect').length;
+  expect(rectsBefore).toBeGreaterThan(100);
+});
+
+test('unloaded ground stays visibly unloaded — not flat, not sea', () => {
+  const { ctx, fills, texts } = recorder();
+  paintMap(ctx, view, { ...base, terrain: nothing });
+  // Nothing from the hypsometric ramp reached the canvas: no cell claims to be ground.
+  expect(fills.filter(c => c.startsWith('rgb('))).toHaveLength(0);
+  expect(fills).toContain(UNLOADED_FILL);                     // the hatch, instead
+  expect(texts).toContain(TERRAIN_UNLOADED_LABEL(100));       // …and the number, said out loud
+});
+
+test('a measured DEM is painted in its own colours, and says nothing about missing ground', () => {
+  const { ctx, fills, texts } = recorder();
+  paintMap(ctx, view, { ...base, terrain: flat });
+  expect(fills.filter(c => c.startsWith('rgb(')).length).toBeGreaterThan(100);
+  expect(fills).not.toContain(UNLOADED_FILL);
+  expect(texts.some(t => t.includes('NOT loaded'))).toBe(false);
+});
+
+test('the shade raster is not recomputed while the epoch and the view hold still', () => {
+  let calls = 0;
+  const counted = (): number => { calls++; return 800; };
+
+  const a = recorder();
+  paintMap(a.ctx, view, { ...base, terrain: { elev: counted, epoch: 7 } });
+  const first = calls;
+  expect(first).toBeGreaterThan(0);
+
+  const b = recorder();
+  paintMap(b.ctx, view, { ...base, terrain: { elev: counted, epoch: 7 } });
+  expect(calls).toBe(first);                     // same ground, same window: not one sample more
+  expect(b.ops.filter(o => o === 'fillRect').length).toBeGreaterThan(100);   // …but still painted
+
+  const c = recorder();
+  paintMap(c.ctx, view, { ...base, terrain: { elev: counted, epoch: 8 } });  // a tile landed
+  expect(calls).toBeGreaterThan(first);
+});
+
+test('a different DEM at the same epoch is a different DEM — the cache does not confuse them', () => {
+  // A pack swapped for an empty one, the epoch untouched. Handing back the old hillshade here
+  // would draw measured ground the new sampler knows nothing about: a wrong shade is worse than
+  // no shade, because it is drawn with confidence.
+  const a = recorder();
+  paintMap(a.ctx, view, { ...base, terrain: { elev: () => 800, epoch: 3 } });
+  expect(a.fills.some(c => c.startsWith('rgb('))).toBe(true);
+
+  const b = recorder();
+  paintMap(b.ctx, view, { ...base, terrain: { elev: () => null, epoch: 3 } });
+  expect(b.fills.some(c => c.startsWith('rgb('))).toBe(false);
+  expect(b.texts).toContain(TERRAIN_UNLOADED_LABEL(100));
+});
+
+// ---- LND-003: the three states ----
+
+test('an indeterminate field is never painted as reachable (LND-003)', () => {
+  const { ctx, strokes, fills, texts } = recorder();
+  paintMap(ctx, view, {
+    ...base,
+    landables: [
+      field('REACHABLE', 8.01, 'reachable'),
+      field('OUT OF GLIDE', 8.02, 'unreachable', 'airfield-gliding'),
+      field('UNMEASURED', 8.03, 'indeterminate', 'airfield-gliding'),
+    ],
+  });
+  const marks = [...strokes, ...fills];
+  expect(marks).toContain(LANDABLE_COLOR.indeterminate);
+  expect(marks).toContain(LANDABLE_COLOR.unreachable);
+  // The one green mark on the map is the one field core called reachable. The unmeasured field
+  // borrowing that green — the field whose ground the DEM never answered for — is the failure
+  // this test exists to make impossible.
+  expect(marks.filter(c => c === LANDABLE_COLOR.reachable)).toHaveLength(1);
+  expect(texts).toContain('REACHABLE');          // only the top reachable field is named
+  expect(texts).not.toContain('UNMEASURED');
 });

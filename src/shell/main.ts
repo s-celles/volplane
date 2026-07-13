@@ -31,6 +31,9 @@ import {
   type Task, type TaskProgress, type Waypoint, type AatProgress,
 } from '../core/task';
 import { reachable, type ReachRay } from '../core/reach';
+import { parsePoiFile, isLandable, LANDABLE_CATS, type Poi, type PoiCat } from '../core/cup';
+import { alternates, type Alternate } from '../core/landables';
+import { alternatesHtml, styleFilterHtml } from './landables-ui';
 import { varioTone, stfTone } from '../core/vartone';
 import { barograph, effectiveGlide, climbs } from '../core/analysis';
 import { freeDistance, faiTriangle } from '../core/optimise';
@@ -83,7 +86,14 @@ let settings: Settings = await loadSettings(kv);
 // — or been provisioned for — the radio is never consulted, so the Fly screen survives a
 // network cut over known terrain. Until a tile lands, the ground is NULL: UNKNOWN, which the
 // whole chain is built to carry honestly.
+// TER-001: the one fact the map's shade cache needs. The sampler is a closure over a store
+// that mutates underneath it, so its identity never changes when a tile lands — the epoch is
+// how the ground SAYS it changed. Bumped here and nowhere else; the painter memoises on it and
+// so recomputes the hillshade exactly when there is new ground to shade, and never at 1 Hz
+// over ground that did not move.
+let tileEpoch = 0;
 const terrain = terrainStore(() => {
+  tileEpoch++;
   // A tile arrived: the ground under the unmoved glider may just have become known. Repricing
   // costs a lookup; waiting for the next fix would show UNKNOWN over terrain we now hold.
   const s = reground(state, elev);
@@ -147,6 +157,10 @@ app.innerHTML = `
       <input id="plr" type="file" accept=".plr,.txt" /></label>
     <span id="plr-label" class="polar-label"></span>
     <button id="plr-default" type="button" title="forget the imported polar and fly the built-in default">default</button>
+    <label class="replay" title="CFG-007: SeeYou waypoints — the landable fields">landables (.cup)
+      <input id="cup" type="file" accept=".cup,.txt" /></label>
+    <span id="cup-label" class="goal-label"></span>
+    ${styleFilterHtml(null)}
     <label class="replay" title="ESP-004: airspace classes that ALERT, comma-separated — empty means all; the map always draws everything">alert classes
       <input id="set-classes" size="10" placeholder="all" /></label>
   </form>
@@ -233,6 +247,14 @@ let aat: AatProgress | null = null;                // TSK: best scoring fixes pe
 const trail: [number, number][] = [];              // CAR: the recent track
 let mapWidthM = 20_000;                            // CAR: zoom, metres across the canvas
 let audio: AudioOut | null = null;                 // VAR-004/005: null = silent, and it SAYS so
+// LND: the fields the pilot loaded, the ones he wants to see, and core's verdict on them for
+// THIS fix. `cup` is the file; `styleFilter` is a view filter — null means every landable
+// style, and it is deliberately NOT persisted: it is what the pilot is looking at right now,
+// not a setting he flies by. `alts` is recomputed per render and never remembered: an
+// alternate is a claim about one position and one height, and yesterday's is a lie.
+let cup: Poi[] = [];
+let styleFilter: PoiCat[] | null = null;
+let alts: Alternate[] = [];
 const flightTrack: TrackPoint[] = [];              // ANA/CNC: the flight, for the analysis tab
 
 const setting = (id: string, fallback: number): number => {
@@ -330,6 +352,13 @@ function repaintMap(s: NavState): void {
   paintMovingMap(ctx, view, {
     state: s, trail, spaces, traffic: traffic.picture(s.fix?.sod ?? 0),
     goal: goal ? { lon: goal.lon, lat: goal.lat } : null, rangeM, reach,
+    // TER-001: the ground goes UNDER everything, and it goes under it measured — the painter
+    // memoises on the epoch, so this costs a lookup per moved view, not a DEM sweep per second.
+    terrain: { elev, epoch: tileEpoch },
+    // LND-002/003: core judged them in render(); the painter only colours what it was handed.
+    // The same list, on the map and in the panel — two pictures of one verdict, never two
+    // verdicts of one field.
+    landables: visibleAlts(alts),
   });
 
   // ANA-002: the slice straight ahead — the dimension the plan view flattens away.
@@ -342,6 +371,30 @@ function repaintMap(s: NavState): void {
   } else if (xs) {
     xs.innerHTML = '';                      // no track, no slice: nothing to draw ahead of
   }
+}
+
+/** LND-002…006: the alternates for THIS fix. Height is the whole question — without an
+ *  altitude there is no glide slope to march, so there is no list, and an empty list is what
+ *  the panel and the map both get. Not a list of fields with unknown margins: a field we could
+ *  not judge is a question we did not ask, and the honest picture of an unasked question is
+ *  nothing at all.
+ *
+ *  The wind is the wind IN USE — ours by preference, the instrument's when we have none —
+ *  chosen exactly as the reach march above chooses it, because a panel priced against one wind
+ *  beside a polygon priced against another is two computers arguing on one screen. And the
+ *  reserve is the SAME #set-reserve the reach polygon and the final glide keep: one reserve,
+ *  one spelling, and a pilot who lowers it lowers it everywhere at once. */
+function computeAlternates(s: NavState): Alternate[] {
+  if (!cup.length || s.fix?.alt == null) return [];
+  const w = estimator.estimate() ?? s.reportedWind ?? null;
+  // NO type filter goes down into core, and the reason is a confirmed review finding: a field
+  // excluded from the JUDGING is a field the "NO landable field within reach" banner would then
+  // speak for without ever having asked about it — which is how "I unticked outlanding fields"
+  // silently becomes "nothing is reachable" with a vachable strip six kilometres away. Core
+  // judges every landable, always. The filter below hides ROWS, never verdicts.
+  return alternates(elev, s.fix.lon, s.fix.lat, s.fix.alt, cup, polar, {
+    wind: w, safetyM: setting('#set-reserve', 200),
+  });
 }
 
 function render(s: NavState, link: LinkState): void {
@@ -370,6 +423,9 @@ function render(s: NavState, link: LinkState): void {
   // dimmed, and captioned with what happened. A screen that keeps showing a dead
   // instrument's last position as current is the failure mode this class exists to prevent.
   const stale = link.state === 'silent' || link.state === 'closed';
+  // Judged BEFORE the screen is written, so the panel and the map (repaintMap, below) are two
+  // views of one computation rather than two computations that happen to agree today.
+  alts = computeAlternates(s);
   flyView.innerHTML = `
     <div class="boxes${stale ? ' stale' : ''}">
       ${box('Latitude', fmt(s.fix?.lat, 5), '°')}
@@ -394,6 +450,7 @@ function render(s: NavState, link: LinkState): void {
     ${flarmHtml(s)}
     ${airspaceHtml(s)}
     ${taskHtml()}
+    <div id="alternates">${alternatesHtml(visibleAlts(alts))}</div>
     <div class="link ${link.state}">Link: ${link.state}${
       link.state === 'closed' && link.error ? ` — ${link.error}` : ''
     }${stale ? ' — values are the LAST RECEIVED, not current' : ''}${
@@ -430,7 +487,52 @@ function render(s: NavState, link: LinkState): void {
     `goal ${goal.lat.toFixed(3)}, ${goal.lon.toFixed(3)} @ ${goal.elev.toFixed(0)} m`;
   render(state, link);
 };
-app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => render(state, link);
+/** CFG-007 / LND-001: adopt a SeeYou .cup — the pilot's own list of fields, which is the only
+ *  thing in this app that knows where one may land. Rows the parser cannot read are COUNTED in
+ *  the label, never guessed at: a waypoint silently dropped is a field the pilot believes is in
+ *  the list, and he believes it hardest on the day he needs it. Returns the label to show, or
+ *  null when the text amounts to no points at all.
+ *
+ *  The ONE parse path, exactly as adoptTask is for tasks: the file input and the restart
+ *  restore (OFF-002) both come through here, so a restored .cup cannot behave differently from
+ *  one just chosen. */
+function adoptCup(text: string): string | null {
+  const f = parsePoiFile(text);
+  if (f.pois.length === 0) return null;
+  cup = f.pois;
+  const landable = f.pois.filter(p => isLandable(p.cat)).length;
+  return `${f.pois.length} points, ${landable} landable${
+    f.refused ? `, ${f.refused} rows refused` : ''}`;
+}
+(app.querySelector('#cup') as HTMLInputElement).onchange = async e => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  const text = await f.text();
+  const label = adoptCup(text);
+  (app.querySelector('#cup-label') as HTMLElement).textContent =
+    label ?? 'no waypoints the parser could read — keeping the current landables';
+  // OFF-002, and the same refusal discipline as the task: a file that yielded nothing is not a
+  // database of fields, and it must not come back next launch posing as one.
+  if (label) void saveFlightFile(kv, 'landables', { name: f.name, text });
+  render(state, link);
+};
+/** LND-008, applied where it belongs: a VIEW over verdicts core already reached. */
+const visibleAlts = (all: readonly Alternate[]): Alternate[] =>
+  styleFilter == null ? [...all] : all.filter(a => styleFilter!.includes(a.point.cat));
+
+/** LND-008: which styles the pilot wants to SEE. All four ticked is the same as no filter, and
+ *  it is spelt as no filter — null — so the default state has one representation, not two.
+ *  This is a view filter and nothing more: it never persists, and it never changes what core
+ *  judges, only which fields core is asked about. */
+function readStyleFilter(): PoiCat[] | null {
+  const on = LANDABLE_CATS.filter(
+    c => app.querySelector<HTMLInputElement>(`#lnd-style-${c}`)?.checked);
+  return on.length === LANDABLE_CATS.length ? null : on;
+}
+app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => {
+  styleFilter = readStyleFilter();
+  render(state, link);
+};
 // ESP-004: the ack rides the shelfEl pattern — ONE delegated listener on the container that
 // is built once, because the alert rows under it repaint every second. The ack is keyed, not
 // indexed: between the paint and the tap the row order may have changed, but the key still
@@ -1357,7 +1459,15 @@ async function restoreFlightFiles(): Promise<void> {
         `${label} (restored: ${tk.name})`;
     }
   }
-  if (oa || tk) render(state, link);
+  const cf = await loadFlightFile(kv, 'landables');
+  if (cf) {
+    const label = adoptCup(cf.text);
+    if (label) {
+      (app.querySelector('#cup-label') as HTMLElement).textContent =
+        `${label} (restored: ${cf.name})`;
+    }
+  }
+  if (oa || tk || cf) render(state, link);
 }
 
 // The settings, back into the forms they rule from (OFF-002: configuration persists). The
