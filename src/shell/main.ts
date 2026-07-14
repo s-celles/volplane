@@ -42,6 +42,7 @@ import { varioTone, stfTone } from '../core/vartone';
 import { chooseVoice } from '../core/alarmtone';
 import { circlingTracker } from '../core/circling';
 import { nextPhase, PHASE_BOXES, PHASE_TITLE, type Phase } from '../core/phase';
+import { recogniser, type Gesture } from '../core/gesture';
 import { heroHtml, glideBarHtml } from './flyframe-ui';
 import { circleRose } from '../core/circleassist';
 import {
@@ -240,6 +241,7 @@ app.innerHTML = `
         <button id="zoom-in" type="button">+</button>
         <button id="zoom-out" type="button">−</button>
       </div>
+      <button id="manual-view" type="button" hidden></button>
       <div id="fly-aside">
         <div id="xsection" class="xsection-frame"></div>
         <div id="rose" class="rose-frame"></div>
@@ -322,6 +324,7 @@ const flyView = root.querySelector<HTMLElement>('#fly-view')!;
 const heroEl = root.querySelector<HTMLElement>('#hero-strip')!;
 const glidebarEl = root.querySelector<HTMLElement>('#glidebar-slot')!;
 const alertsEl = root.querySelector<HTMLElement>('#fly-alerts')!;
+const manualEl = root.querySelector<HTMLButtonElement>('#manual-view')!;
 
 /** The phase of the flight, carried between renders because it has HYSTERESIS: an arrival height
  *  hovering around the reserve would otherwise flip the whole screen back and forth at 1 Hz, and a
@@ -411,7 +414,30 @@ let taskQuery = '';
 let taskProgress: TaskProgress | null = null;
 let aat: AatProgress | null = null;                // TSK: best scoring fixes per assigned area
 const trail: [number, number][] = [];              // CAR: the recent track
-let mapWidthM = 20_000;                            // CAR: zoom, metres across the canvas
+const DEFAULT_WIDTH_M = 20_000;
+let mapWidthM = DEFAULT_WIDTH_M;                   // CAR: zoom, metres across the canvas
+
+/** WHERE THE MAP IS LOOKING, when it is not looking at the glider.
+ *
+ *  Null is the normal state and the safe one: the map follows the aircraft. A pan sets this, and from
+ *  that moment THE MAP IS NO LONGER ABOUT HIM — it is about a piece of ground he chose to look at,
+ *  and the glider will fly off the edge of it while he watches something else.
+ *
+ *  That is a real and useful thing to do (where is that ridge? what is under the next cloud street?)
+ *  and it is also the single most dangerous state this screen can be in, because it is INVISIBLE. A
+ *  pilot who panned and forgot is flying with an instrument that quietly stopped being an instrument.
+ *
+ *  So it is never silent: manualCentre !== null puts a banner across the map, and the banner IS the
+ *  way back. Other computers use a timeout, and a timeout is a machine deciding he has finished
+ *  looking. A banner is him deciding. */
+let manualCentre: { lon: number; lat: number } | null = null;
+
+/** Where the map looks when there is no fix and nobody has panned. Somewhere in the Alps, and it is
+ *  a placeholder, not a position — but it is a place the pilot may want to look AROUND before the
+ *  GPS has locked, which is why panBy starts from it too rather than refusing. Refusing was the first
+ *  version, and it meant the map could not be moved at all on the ground: the one time a pilot is
+ *  actually free to look at it. */
+const NOWHERE = { lon: 8, lat: 47 };
 
 // The world, minimally — parsed ONCE, at startup, from the Frictionless package bundled into the
 // build. It costs 220 KB and no network at all: a pilot who has never had a connection still
@@ -552,7 +578,7 @@ function repaintMap(s: NavState, stale: boolean): void {
   }
 
   const ctx = canvasEl.getContext('2d') as unknown as MapPaint2D;
-  const centre = s.fix ? { lon: s.fix.lon, lat: s.fix.lat } : { lon: 8, lat: 47 };
+  const centre = manualCentre ?? (s.fix ? { lon: s.fix.lon, lat: s.fix.lat } : NOWHERE);
   const view: MapView = { centre, widthM: mapWidthM, wPx: canvasEl.width, hPx: canvasEl.height };
   // The still-air range: AGL × best-glide L/D, no wind. It is the FALLBACK now — kept only
   // for when the reach cannot be marched, and still stamped with its assumption.
@@ -743,6 +769,17 @@ function render(s: NavState, link: LinkState): void {
   // glider — and a transient thing that permanently reserves a row of the layout has stolen that row
   // from the map for the 99 % of the flight when there is nothing to say.
   alertsEl.innerHTML = alertsHtml({ flarm: fl, terrain: verdict }, settings.units, t);
+
+  // ---- THE MAP HAS STOPPED FOLLOWING HIM, AND IT SAYS SO ----
+  //
+  // Panning is a real and useful thing to do — where is that ridge, what is under the next street —
+  // and it is also the single most dangerous state this screen can be in, because it is INVISIBLE.
+  // The glider flies off the edge of a picture the pilot is still reading as if it were about him.
+  //
+  // So the banner is never silent, and THE BANNER IS THE WAY BACK: it is the button. Other computers
+  // use a timeout, and a timeout is a machine deciding he has finished looking. This is him deciding.
+  manualEl.hidden = manualCentre === null;
+  manualEl.textContent = t('map.manual');
 
   // Six boxes, six slots, and NOTHING ELSE between the pilot and his map.
   //
@@ -1048,8 +1085,94 @@ const plrLabel = root.querySelector('#plr-label') as HTMLElement;
   audio = openAudio();
   btn.textContent = audio ? t('fly.audioOn') : t('fly.audioNone');
 };
-(root.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => { mapWidthM = Math.max(2000, mapWidthM / 1.5); render(state, link); };
-(root.querySelector('#zoom-out') as HTMLButtonElement).onclick = () => { mapWidthM = Math.min(200_000, mapWidthM * 1.5); render(state, link); };
+// ---- the view, and the three things a pilot does to it ----
+
+const MIN_WIDTH_M = 2_000, MAX_WIDTH_M = 200_000;
+const zoomBy = (factor: number): void => {
+  mapWidthM = Math.max(MIN_WIDTH_M, Math.min(MAX_WIDTH_M, mapWidthM * factor));
+  render(state, link);
+};
+
+/** PUT IT BACK. Follow the glider again, at the range the screen opens on.
+ *
+ *  It restores BOTH — the centre and the zoom — because a pilot reaching for this has stopped
+ *  understanding what he is looking at, and half a reset would leave him still not understanding it. */
+const resetView = (): void => {
+  manualCentre = null;
+  mapWidthM = DEFAULT_WIDTH_M;
+  render(state, link);
+};
+
+/** Drag the ground under the finger.
+ *
+ *  Screen y grows downward and north is up: pulling the finger DOWN drags the picture down and
+ *  uncovers ground to the NORTH, so the centre goes north. Pulling it RIGHT uncovers ground to the
+ *  WEST. Getting this backwards produces a map that fights the hand, which every pilot will describe
+ *  as "broken" and none will describe correctly. */
+const M_PER_DEG_LAT = 111_320;
+const panBy = (dxPx: number, dyPx: number): void => {
+  const canvasEl = root.querySelector<HTMLCanvasElement>('#map');
+  if (canvasEl === null || canvasEl.width === 0) return;
+  const base = manualCentre ?? (state.fix ? { lon: state.fix.lon, lat: state.fix.lat } : NOWHERE);
+  const mPerPx = mapWidthM / canvasEl.width;
+  const lat = base.lat + (dyPx * mPerPx) / M_PER_DEG_LAT;
+  const cos = Math.max(0.01, Math.cos(base.lat * Math.PI / 180));
+  const lon = base.lon - (dxPx * mPerPx) / (M_PER_DEG_LAT * cos);
+  manualCentre = { lon, lat };
+  render(state, link);
+};
+
+(root.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => zoomBy(1 / 1.5);
+(root.querySelector('#zoom-out') as HTMLButtonElement).onclick = () => zoomBy(1.5);
+
+// ---- THE GESTURES ----
+//
+// A button has a size. A gesture does not, and that is the whole argument for using one in a moving
+// aircraft: the pilot is being thrown about, one hand is on the stick, and the screen gets a glance.
+// The recogniser is pure and lives in core/gesture.ts, with the guard that matters — a drag under
+// MIN_PAN_PX is A TAP THAT SLID, not a pan, and that is the accident pilots name themselves.
+const gestures = recogniser();
+const mapEl = root.querySelector<HTMLCanvasElement>('#map')!;
+
+const apply = (g: Gesture): void => {
+  switch (g.kind) {
+    case 'pan': panBy(g.dxPx, g.dyPx); break;
+    case 'zoom': zoomBy(g.factor); break;
+    case 'reset': resetView(); break;
+    case 'none': break;
+  }
+};
+
+mapEl.style.touchAction = 'none';      // or the browser pans the PAGE and the map never sees it
+mapEl.addEventListener('pointerdown', e => {
+  mapEl.setPointerCapture(e.pointerId);
+  apply(gestures.down({ id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp }));
+});
+mapEl.addEventListener('pointermove', e => {
+  apply(gestures.move({ id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp }));
+});
+mapEl.addEventListener('pointerup', e => {
+  apply(gestures.up({ id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp }));
+});
+// A gesture the browser took away is FORGOTTEN, not half-remembered. One completed by the NEXT touch
+// is how a map ends up somewhere nobody asked for.
+//
+// AND IT IS `pointercancel`, NOT `lostpointercapture`. The first draft listened to both, on the
+// reasoning that losing the capture is losing the gesture. IT IS NOT: lostpointercapture fires on
+// EVERY NORMAL RELEASE, because releasing the finger implicitly releases the capture. So every tap
+// ended in a cancel(), the first tap was wiped before the second arrived, and THE DOUBLE TAP COULD
+// NEVER FIRE — a feature that passed its unit tests and did nothing in a browser, because the tests
+// call the recogniser and the browser calls the DOM.
+mapEl.addEventListener('pointercancel', () => gestures.cancel());
+
+// The wheel, for the desk. It is not a flying gesture and it is not pretending to be one — but a
+// developer who cannot zoom the map with a mouse will not look at the map.
+manualEl.onclick = resetView;
+
+mapEl.addEventListener('wheel', e => {
+  e.preventDefault();
+  zoomBy(e.deltaY > 0 ? 1.15 : 1 / 1.15);
+}, { passive: false });
 /** ESP: adopt an OpenAir file's text. ESP-001's display starts as words; the map (CAR) draws
  *  them. Refusals are COUNTED out loud — a volume silently dropped is a TMA the pilot thinks
  *  is loaded. One parse path for the file input and the restore (OFF-002), like adoptTask.

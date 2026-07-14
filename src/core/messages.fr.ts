@@ -338,6 +338,7 @@ export const FR: Record<MsgId, string> = {
   'phase.cruise.title': 'Entre deux ascendances. Les cases donnent le netto — l’air, débarrassé du planeur — et la vitesse à laquelle le traverser.',
   'phase.finalGlide': 'ARRIVÉE',
   'phase.finalGlide.title': 'Le but est atteignable, réserve gardée. La question n’est plus où est la prochaine ascendance : c’est si vous tenez la pente.',
+  'map.manual': 'VUE MANUELLE — toucher pour suivre le planeur à nouveau',
   'hero.goal': 'BUT',
   'hero.noGoal': 'pas de but',
   'hero.glideBar.title': 'Hauteur au-dessus du but à l’arrivée, réserve déjà déduite. Au-dessus du trait et vert : vous y êtes. En dessous et rouge : non.',

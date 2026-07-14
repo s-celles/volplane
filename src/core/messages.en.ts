@@ -359,6 +359,7 @@ export const EN = {
   'phase.cruise.title': 'Between climbs. The boxes show netto — the air, stripped of the glider — and the speed to fly it at.',
   'phase.finalGlide': 'FINAL GLIDE',
   'phase.finalGlide.title': 'The goal is reachable with the reserve still in hand. The question is no longer where the next climb is, it is whether you are holding the slope.',
+  'map.manual': 'MANUAL VIEW — tap to follow the glider again',
   'hero.goal': 'GOAL',
   'hero.noGoal': 'no goal',
   'hero.glideBar.title': 'Height above the goal on arrival, reserve already spent. Above the line and green: you arrive. Below and red: you do not.',

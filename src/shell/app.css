@@ -534,3 +534,18 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
  */
 .fly-controls button, .fly-controls input { min-height: 3rem; font-size: 1rem; }
 .map-zoom button { width: 3rem; height: 3rem; font-size: 1.4rem; padding: 0; }
+
+/* THE MAP HAS STOPPED FOLLOWING HIM, AND IT SAYS SO.
+ *
+ * Panning is useful and it is the most dangerous state this screen can be in, because it is INVISIBLE:
+ * the glider flies off the edge of a picture the pilot is still reading as if it were about him. So
+ * the banner is loud, it is across the map, and IT IS THE BUTTON — tapping it puts the view back.
+ * Other computers use a timeout, and a timeout is a machine deciding he has finished looking. */
+#manual-view {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: .75rem;
+  min-height: 3rem; padding: 0 1.25rem;
+  background: var(--warn); color: #0b0d10; border: none;
+  font-weight: 700; letter-spacing: .06em; text-transform: uppercase; font-size: .9rem;
+  border-radius: .4rem; box-shadow: 0 .25rem 1rem #0009;
+}
+#manual-view[hidden] { display: none; }

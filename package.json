@@ -1,6 +1,6 @@
 {
   "name": "volplane",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "description": "A free soaring flight computer.",
