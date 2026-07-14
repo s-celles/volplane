@@ -111,3 +111,96 @@ export function taskRibbonHtml(
     ? ` <span class="tsk-done">${esc(t('task.complete'))}</span>` : '';
   return `<div class="tsk">${esc(t('task.title'))} (${esc(task.rules)}): ${chain}${complete} ${figs.join(' ')}</div>`;
 }
+
+// ============ TSK-002/008/009: the task the pilot BUILDS ============
+// Pure, like every renderer here: waypoints and a translator in, an HTML string out. No document, no
+// listeners, no persistence. main.ts hangs ONE delegated listener on the container and reads
+// data-act and data-i — the shelf-ui contract — which is why the whole screen can repaint after
+// every edit without a single dead control.
+//
+// It is a TAB, not a settings section, and that is TSK-008: a task is edited IN FLIGHT. The day
+// starts differently from the briefing, the second turnpoint is under cloud, and the pilot rebuilds
+// his task at 1500 metres. A builder he can only reach on the ground is a builder he cannot use.
+
+import { taskProblems, taskLengthM, RULE_VERSIONS } from '../core/taskedit';
+import type { Waypoint, RulesVersion } from '../core/task';
+import type { Poi } from 'soaring-core/poi';
+import { format } from '../core/units';
+
+function escT(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+export interface TaskEditor {
+  wps: readonly Waypoint[];
+  rules: RulesVersion;
+  /** The waypoint database the pilot picks from — his own `.cup`. Empty when he has loaded none, and
+   *  the screen SAYS so rather than showing an empty picker that looks broken. */
+  pois: readonly Poi[];
+  /** What he has typed into the search box. The list is filtered, not paginated: a pilot looking for
+   *  ROMORANTIN types four letters and sees it, and a "next page" button in a cockpit is a button
+   *  nobody presses. */
+  query: string;
+  units: UnitPrefs;
+}
+
+/** TSK-002: the ordered task, the picker, and TSK-009's verdict — which names what is wrong rather
+ *  than merely saying that something is. */
+export function taskEditorHtml(e: TaskEditor, t: T): string {
+  const problems = taskProblems(e.wps);
+  const lengthM = taskLengthM(e.wps);
+
+  const rows = e.wps.map((wp, i) => {
+    // The role each point plays is the KERNEL's decision (simpleTask): first is the start, last is
+    // the finish, the rest are turnpoints. It is shown, not chosen — a pilot who could label a point
+    // 'start' independently of its position would have two answers to one question.
+    const role = i === 0 ? t('task.role.start')
+      : i === e.wps.length - 1 ? t('task.role.finish')
+      : t('task.role.turn');
+    const broken = problems.some(p => p.index === i);
+    return `<div class="task-row${broken ? ' broken' : ''}">
+      <span class="task-role">${escT(role)}</span>
+      <span class="task-name">${escT(wp.name)}</span>
+      <button type="button" data-act="up" data-i="${i}">${escT(t('task.up'))}</button>
+      <button type="button" data-act="down" data-i="${i}">${escT(t('task.down'))}</button>
+      <button type="button" data-act="remove" data-i="${i}">${escT(t('task.remove'))}</button>
+    </div>`;
+  }).join('');
+
+  // The picker. A `.cup` holds thousands of points and a cockpit holds one thumb, so the list is
+  // filtered by what he typed and capped — and the cap is SAID, because a list that silently stops
+  // at twenty reads as a database with twenty points in it.
+  const q = e.query.trim().toLowerCase();
+  const hits = q === '' ? [] : e.pois.filter(p => p.name.toLowerCase().includes(q));
+  const CAP = 20;
+  const shown = hits.slice(0, CAP);
+  const picker = e.pois.length === 0
+    ? `<p class="task-empty">${escT(t('task.noPoints'))}</p>`
+    : `<input id="task-q" class="task-q" value="${escT(e.query)}" placeholder="${escT(t('task.search'))}" />
+       ${shown.map(p =>
+         `<button type="button" class="task-hit" data-act="add" data-name="${escT(p.name)}">${escT(p.name)}</button>`,
+       ).join('')}
+       ${hits.length > CAP
+         ? `<p class="task-more">${escT(t('task.more', { n: hits.length - CAP }))}</p>`
+         : ''}`;
+
+  const trouble = problems.map(p =>
+    `<li class="task-problem">${escT(t(p.id, p.params))}</li>`).join('');
+
+  const rulesPicker = RULE_VERSIONS.map(v =>
+    `<option value="${escT(v)}"${v === e.rules ? ' selected' : ''}>${escT(v)}</option>`).join('');
+
+  const len = lengthM === null ? null : format(lengthM, 'distance', e.units.distance);
+
+  return `<h2>${escT(t('task.editor.title'))}</h2>
+    <div class="task-head">
+      <label>${escT(t('task.rules'))} <select data-act="rules">${rulesPicker}</select></label>
+      <span class="task-length">${len === null
+        ? `<span class="task-none">${escT(t('task.none'))}</span>`
+        : `${escT(t('task.length'))} <strong>${escT(len.text)}</strong> ${escT(len.unit)}`}</span>
+      ${e.wps.length > 0 ? `<button type="button" data-act="clear">${escT(t('task.clear'))}</button>` : ''}
+    </div>
+    ${trouble ? `<ul class="task-problems">${trouble}</ul>` : ''}
+    <div class="task-rows">${rows}</div>
+    <div class="task-picker">${picker}</div>`;
+}

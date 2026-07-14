@@ -28,10 +28,11 @@ import {
 } from '../core/airspace';
 import {
   RULES, simpleTask, freshProgress, advance, freshAat, advanceAat,
-  type Task, type TaskProgress, type Waypoint, type AatProgress,
+  type Task, type TaskProgress, type Waypoint, type AatProgress, type RulesVersion,
 } from '../core/task';
 import { taskStats } from '../core/taskstats';
-import { taskRibbonHtml } from './task-ui';
+import { taskRibbonHtml, taskEditorHtml } from './task-ui';
+import { editWaypoints, withWaypoints, taskWaypoints, type Edit } from '../core/taskedit';
 import { reachable, type ReachRay } from '../core/reach';
 import { parsePeaks, parseShapes } from '../core/landmarks';
 import { parsePoiFile, isLandable, LANDABLE_CATS, type Poi, type PoiCat } from '../core/cup';
@@ -164,11 +165,13 @@ const root = document.getElementById('app')!;
 root.innerHTML = `
   <nav class="tabs">
     <button id="tab-fly" class="active" type="button"></button>
+    <button id="tab-task" type="button"></button>
     <button id="tab-briefing" type="button"></button>
     <button id="tab-analysis" type="button"></button>
     <button id="tab-settings" type="button"></button>
   </nav>
   <div id="fly"></div>
+  <div id="taskedit" hidden></div>
   <div id="briefing" hidden></div>
   <div id="analysis" hidden></div>
   <div id="settings" hidden></div>
@@ -362,6 +365,12 @@ async function releaseOrphan(): Promise<boolean> {
 let spaces: Airspace[] = [];                       // ESP: what the loaded file holds
 let acks: Ack[] = [];                              // ESP-004: what the pilot silenced, and until when
 let task: Task | null = null;                      // TSK: the declared task, if any
+/** TSK-002: what the pilot is BUILDING. The task above is DERIVED from it — see core/taskedit, which
+ *  knows nothing about sectors on purpose. Kept beside the task rather than inside it because a list
+ *  of two points is a list a pilot is halfway through typing, and it is not a task yet. */
+let taskWps: Waypoint[] = [];
+let taskRules: RulesVersion = 'fai-2024';
+let taskQuery = '';
 let taskProgress: TaskProgress | null = null;
 let aat: AatProgress | null = null;                // TSK: best scoring fixes per assigned area
 const trail: [number, number][] = [];              // CAR: the recent track
@@ -883,6 +892,11 @@ function adoptTask(text: string): string | null {
   }
   taskProgress = freshProgress(task);
   aat = freshAat(task);
+  // TSK-008: an IMPORTED task must be editable, or the import is a dead end. The pilot who lands the
+  // day's task off a CSV and then finds the second turnpoint under cloud must be able to take it out
+  // — at 1500 metres, on the tab, without a text editor and a re-import.
+  taskWps = taskWaypoints(task);
+  taskRules = task.rules;
   const areas = task.points.filter(p => p.sector.kind === 'aatArea').length;
   return `${wps.length} points, ${task.rules}${areas ? `, ${areas} assigned area${areas > 1 ? 's' : ''}` : ''}${
     refused ? `, ${refused} lines refused` : ''}`;
@@ -1741,6 +1755,7 @@ onTilesChanged = () => {
 // ---- tabs ----
 
 const tabFly = root.querySelector<HTMLButtonElement>('#tab-fly')!;
+const tabTask = root.querySelector<HTMLButtonElement>('#tab-task')!;
 const tabBf = root.querySelector<HTMLButtonElement>('#tab-briefing')!;
 const tabAna = root.querySelector<HTMLButtonElement>('#tab-analysis')!;
 const tabSet = root.querySelector<HTMLButtonElement>('#tab-settings')!;
@@ -1751,6 +1766,7 @@ const tabSet = root.querySelector<HTMLButtonElement>('#tab-settings')!;
  *  are words, not markup, and the catalogue is not a template engine. */
 function renderChrome(): void {
   tabFly.textContent = t('tab.fly');
+  tabTask.textContent = t('tab.task');
   tabBf.textContent = t('tab.briefing');
   tabAna.textContent = t('tab.analysis');
   tabSet.textContent = t('tab.settings');
@@ -1793,17 +1809,20 @@ function renderFlyChrome(): void {
   root.querySelector<HTMLElement>('#lnd-filter-slot')!.innerHTML = styleFilterHtml(styleFilter, t);
 }
 
-function showTab(which: 'fly' | 'briefing' | 'analysis' | 'settings'): void {
+function showTab(which: 'fly' | 'task' | 'briefing' | 'analysis' | 'settings'): void {
   app.hidden = which !== 'fly';
+  taskEl.hidden = which !== 'task';
   bf.hidden = which !== 'briefing';
   ana.hidden = which !== 'analysis';
   setEl.hidden = which !== 'settings';
   tabFly.classList.toggle('active', which === 'fly');
+  tabTask.classList.toggle('active', which === 'task');
   tabBf.classList.toggle('active', which === 'briefing');
   tabAna.classList.toggle('active', which === 'analysis');
   tabSet.classList.toggle('active', which === 'settings');
   if (which === 'analysis') renderAnalysis();
   if (which === 'settings') renderSettings();
+  if (which === 'task') renderTaskEditor();
   // Screen entry re-measures here too, and for the same reason the briefing does (OFF-010): tiles
   // land while this screen is hidden — a whole pack's worth, if the pilot went to the Briefing tab
   // to provision one — and onFlyTiles deliberately does not repaint a hidden canvas. Coming back
@@ -1825,6 +1844,7 @@ function showTab(which: 'fly' | 'briefing' | 'analysis' | 'settings'): void {
   }
 }
 tabFly.onclick = () => showTab('fly');
+tabTask.onclick = () => showTab('task');
 tabBf.onclick = () => showTab('briefing');
 tabAna.onclick = () => showTab('analysis');
 tabSet.onclick = () => showTab('settings');
@@ -1836,6 +1856,80 @@ tabSet.onclick = () => showTab('settings');
 // glider, and they are shown side by side rather than fused into a single flattering number.
 
 const ana = root.querySelector<HTMLElement>('#analysis')!;
+const taskEl = root.querySelector<HTMLElement>('#taskedit')!;
+
+// ============ TSK-002/008/009: the task the pilot BUILDS ============
+//
+// The whole screen repaints after every edit, and that is why ONE delegated listener on the container
+// is the only listener there is: the buttons under it are replaced on every keystroke, and a listener
+// bound to a button would be bound to a button that no longer exists. It is the shelf-ui contract,
+// and it is what makes a screen that rebuilds itself still work under a thumb.
+//
+// The REDUCER is core's (taskedit.editWaypoints) — pure, tested, and ignorant of what a sector is.
+// The sectors come from simpleTask, where they are defined and where inSector judges them. A builder
+// with its own idea of a sector would be a second rule book, and the map would draw one while the
+// scorer judged by the other.
+function renderTaskEditor(): void {
+  taskEl.innerHTML = taskEditorHtml(
+    { wps: taskWps, rules: taskRules, pois: cup, query: taskQuery, units: settings.units }, t,
+  );
+}
+
+/** One edit: apply it, DERIVE the task, and repaint. The task is null until two points exist — one
+ *  point is not a shorter task, it is not a task, and a half-built list must not quietly become the
+ *  thing the map draws and the scorer judges. */
+function editTask(act: Edit, index: number, wp?: Waypoint): void {
+  taskWps = editWaypoints(taskWps, act, index, wp);
+  task = withWaypoints(taskWps, taskRules);
+  taskProgress = null;                 // a task that changed is a task he has not flown yet
+  renderTaskEditor();
+  render(state, link);                 // the map draws it the moment he places the point
+}
+
+taskEl.oninput = e => {
+  const el = e.target as HTMLElement;
+  if (el.id === 'task-q') { taskQuery = (el as HTMLInputElement).value; renderTaskEditor(); }
+};
+
+taskEl.onchange = e => {
+  const el = e.target as HTMLSelectElement;
+  if (el.dataset.act === 'rules') {
+    taskRules = el.value as RulesVersion;
+    task = withWaypoints(taskWps, taskRules);
+    taskProgress = null;
+    renderTaskEditor();
+    render(state, link);
+  }
+};
+
+taskEl.onclick = e => {
+  const btn = (e.target as HTMLElement).closest('button[data-act]') as HTMLButtonElement | null;
+  if (btn === null) return;
+  const act = btn.dataset.act;
+
+  if (act === 'clear') {
+    taskWps = [];
+    task = null;
+    taskProgress = null;
+    taskQuery = '';
+    renderTaskEditor();
+    render(state, link);
+    return;
+  }
+
+  if (act === 'add') {
+    // The point is found by NAME, in the file he loaded, at the moment he taps — not captured into
+    // the button when the list was painted. Between the paint and the tap he may have typed another
+    // letter and the list may have moved under his finger.
+    const wanted = btn.dataset.name;
+    const poi = cup.find(p => p.name === wanted);
+    if (poi) editTask('add', 0, { name: poi.name, lon: poi.lon, lat: poi.lat });
+    return;
+  }
+
+  const i = Number(btn.dataset.i);
+  if (Number.isFinite(i) && (act === 'up' || act === 'down' || act === 'remove')) editTask(act, i);
+};
 
 /** The barograph, as an SVG. Altitude against time, and the climbs the kernel found marked
  *  under it — the day's real work, where it came from. */

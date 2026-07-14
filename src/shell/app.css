@@ -420,3 +420,24 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
 .settings-box-row { grid-template-columns: 1fr auto auto auto; }
 .settings-box-label { font-size: .85rem; }
 .settings-box-row button { font-size: .75rem; padding: .25rem .5rem; }
+
+/* ---- TSK-002: the task the pilot builds ---- */
+#taskedit { padding-right: 1rem; }
+.task-head { display: flex; align-items: center; gap: 1rem; margin-bottom: .75rem; font-size: .9rem; color: var(--dim); }
+.task-length strong { color: var(--fg); font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.task-none { color: var(--dim); }
+.task-rows { display: flex; flex-direction: column; gap: .25rem; max-width: 34rem; }
+.task-row { display: grid; grid-template-columns: 4.5rem 1fr auto auto auto; align-items: center; gap: .5rem;
+            background: #151920; border-radius: .4rem; padding: .35rem .6rem; }
+/* A broken leg is not a styling choice: TSK-009 named it, and the row it names must be the row the
+ * eye lands on. A problem listed at the top and invisible in the list is a problem he has to hunt. */
+.task-row.broken { outline: 1px solid var(--bad); }
+.task-role { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.task-name { font-weight: 600; }
+.task-row button { padding: .15rem .5rem; font-size: .8rem; }
+.task-problems { margin: .5rem 0 .75rem; padding-left: 1.1rem; max-width: 40rem; }
+.task-problem { color: var(--bad); font-size: .85rem; margin-bottom: .25rem; }
+.task-picker { margin-top: 1rem; max-width: 34rem; }
+.task-q { width: 100%; padding: .4rem .6rem; margin-bottom: .5rem; }
+.task-hit { display: block; width: 100%; text-align: left; padding: .35rem .6rem; margin-bottom: .2rem; }
+.task-empty, .task-more { color: var(--dim); font-size: .85rem; }
