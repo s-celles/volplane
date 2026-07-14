@@ -27,7 +27,7 @@
 import { massBandKg, type Settings } from '../core/config';
 import { QUANTITIES, PRESETS, unitFor, convert, type Quantity, type UnitSystem } from '../core/units';
 import { LANGS, type Lang } from '../core/i18n';
-import { GLIDER_LIBRARY, groupLibrary, type GliderPolar } from '../core/polarlib';
+import { GLIDER_LIBRARY, byManufacturer, entryLabel, type GliderPolar } from '../core/polarlib';
 import { BOXES, BOX_BY_ID, type Page } from '../core/infobox';
 import type { T } from './infobox-ui';
 
@@ -105,11 +105,18 @@ export function unitsHtml(s: Settings, t: T): string {
 
 // ---- CFG-002: the glider, and the truth about which polar flies ----
 
-// The groups come from the core's registry, not from an order this file would be inventing: the
-// day soaring-data establishes a class for the 109 gliders it currently leaves honestly unclassed,
-// the picker regroups with no edit here.
-function groupedLibrary(): { cls: string; entries: GliderPolar[] }[] {
-  return groupLibrary(GLIDER_LIBRARY);
+/** Grouped by WHO BUILT THEM, which is how a pilot looks for his own glider.
+ *
+ *  It used to group by FAI class, and that put 106 wings in a single list called `glider` — a pilot
+ *  hunting for his ASW 20 in a scrolling native <select>, in flight, with gloves. He does not think
+ *  "Standard class". He thinks "Schleicher". Nineteen gliders under one heading is a list a hand
+ *  can land on; a hundred and six under `glider` is a haystack.
+ *
+ *  Nothing in this file decides the grouping — core/polarlib does, from soaring-data's `manufacturer`
+ *  column, which is BORROWED from each aircraft's Wikidata item rather than derived. The day the
+ *  commons names the PIK-20's maker, this picker regroups with no edit here. */
+function groupedLibrary(): { maker: string; entries: GliderPolar[] }[] {
+  return byManufacturer(GLIDER_LIBRARY);
 }
 
 /** The glider section (CFG-002): the library pick, the mass he flies it at, and — when there is
@@ -131,12 +138,19 @@ export function gliderHtml(s: Settings, t: T): string {
     ? null
     : GLIDER_LIBRARY.find(g => g.id === s.glider!.libId) ?? null;
 
-  const groups = groupedLibrary().map(({ cls, entries }) => {
+  const groups = groupedLibrary().map(({ maker, entries }) => {
+    // The MODEL, never the polar file's name. LK8000 wrote `Antares_18S`, `ASH-25 (PAS)` — PAS means
+    // "with a passenger", which is how the glider is FLOWN, not what it IS — and, offered to a pilot
+    // as an aircraft, `Discus B from Cumulus Soaring GN II`: the name of the website that
+    // distributed the file. Twenty entries carried underscores. He now reads the aeroplane.
     const options = entries.map(g =>
       `<option value="${esc(g.id)}" data-id="${esc(g.id)}"${g.id === picked?.id ? ' selected' : ''}>`
-      + `${esc(g.name)}</option>`,
+      + `${esc(entryLabel(g, entries))}</option>`,
     ).join('');
-    return `<optgroup label="${esc(cls)}">${options}</optgroup>`;
+    // A maker the commons does not name gets a heading that says so, not an empty one: a blank
+    // optgroup label reads as a bug, and this is a fact.
+    const label = maker !== '' ? maker : t('settings.glider.unknownMaker');
+    return `<optgroup label="${esc(label)}">${options}</optgroup>`;
   }).join('');
 
   const defaultOption =

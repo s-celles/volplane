@@ -55,6 +55,7 @@ export const EN = {
   'settings.glider': 'Glider',
   'settings.glider.library': 'Library',
   'settings.glider.mass': 'Mass in flight',
+  'settings.glider.unknownMaker': 'maker not recorded',
   'settings.glider.refMass': 'Reference mass',
   // The polar as published flies at {ref}; {min}–{max} is the band the box will accept. Printed,
   // not merely enforced: a refused mass repaints the box empty, and a pilot who cannot see WHY

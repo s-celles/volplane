@@ -10,7 +10,8 @@
 
 import { test, expect } from 'bun:test';
 import {
-  GLIDER_LIBRARY, parseGliderLibrary, groupLibrary, gliderById, polarOf, slug, unusableRows,
+  GLIDER_LIBRARY, parseGliderLibrary, groupLibrary, byManufacturer, entryLabel,
+  gliderById, polarOf, slug, unusableRows,
 } from './polarlib';
 import { sinkAt, type Polar } from 'soaring-core/polar';
 
@@ -117,4 +118,36 @@ test('polarOf at a heavier mass leaves the best glide ratio unchanged (ballast b
 
 test('gliderById refuses an unknown id rather than quietly flying another glider', () => {
   expect(gliderById('no-such-glider')).toBeNull();
+});
+
+// ---- what the pilot reads ----
+
+test('two gliders under one model name are told apart by what ACTUALLY differs', () => {
+  // Stripping `(PAS)`, `(PIL)`, `(15m)` and `(17m)` off the polar file names made the picker readable
+  // and made it LIE: the Schleicher group offered `ASH-25` twice, and a pilot picking one of the two
+  // had no way to know which. The suffixes were ugly and they were carrying a FACT — these are
+  // DIFFERENT POLARS. One ASH-25 is loaded with a passenger and one is not; one DG-400 has 15 metres
+  // of wing and the other has 17. Getting it wrong is a final glide computed against the wrong curve.
+  for (const { entries } of byManufacturer(GLIDER_LIBRARY)) {
+    const labels = entries.map(g => entryLabel(g, entries));
+    expect(new Set(labels).size).toBe(labels.length);
+  }
+});
+
+test('the disambiguator appears where it is needed and NOWHERE else', () => {
+  const lib = byManufacturer(GLIDER_LIBRARY);
+  const schleicher = lib.find(g => g.maker.includes('Schleicher'))!;
+  const label = (m: string): string => {
+    const g = schleicher.entries.find(x => entryLabel(x, schleicher.entries).startsWith(m))!;
+    return entryLabel(g, schleicher.entries);
+  };
+  expect(label('ASK-21')).toBe('ASK-21');            // unique: nothing appended
+  expect(label('ASH-25 ')).toMatch(/^ASH-25 — \d+ kg$/);  // two of them: the loading tells them apart
+});
+
+test('the biggest group is a list a hand can land on, not a haystack', () => {
+  // Grouped by FAI class, 106 wings sat in a single list called `glider` — a pilot hunting for his
+  // ASW 20 in a scrolling native <select>, in flight, with gloves.
+  const named = byManufacturer(GLIDER_LIBRARY).filter(g => g.maker !== '');
+  expect(Math.max(...named.map(g => g.entries.length))).toBeLessThan(40);
 });

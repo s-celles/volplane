@@ -31,22 +31,37 @@ import polarsCsv from 'soaring-data/datasets/polars/polars.csv' with { type: 'te
  *  (POT-007). Twelve dashes are the correct output. */
 export interface GliderPolar {
   id: string;
+  /** The polar file's own name, kept for provenance and shown NOWHERE. It is what LK8000 wrote, and
+   *  what LK8000 wrote includes `Discus B from Cumulus Soaring GN II` — the name of the WEBSITE that
+   *  distributed the file. The picker offered that to a pilot as a glider. */
   name: string;
+  /** The AIRCRAFT, and what the pilot actually reads. `Antares_18S` → `Antares 18S`; `ASH-25 (PAS)`
+   *  → `ASH-25`, because PAS means "with a passenger" and describes how the glider is FLOWN, not
+   *  what it IS. Twenty entries carried underscores. */
+  model: string;
+  /** Who BUILT it, borrowed from the aircraft's Wikidata item (P176) — `Rolladen Schneider
+   *  Flugzeugbau`, under its own legal name. Empty for 66 of the wings, and an empty string is the
+   *  honest answer: the commons does not say. */
+  manufacturer: string;
   /** The group this glider is offered under — its FAI class where the data establishes one, and its
-   *  wing class otherwise. NOT a class we inferred: soaring-data leaves `fai_class` empty for 109
-   *  of these wings on purpose, because a 15 m span is Standard class without flaps and 15-Metre
-   *  with them, and the polar files record the flaps of ten wings out of 155. So those gliders are
-   *  offered under `glider`, which is true, rather than under a class nobody established. */
+   *  wing class otherwise. NOT a class we inferred: soaring-data leaves `fai_class` empty on purpose,
+   *  because a 15 m span is Standard class without flaps and 15-Metre with them, and the polar files
+   *  record the flaps of ten wings out of 154. So those gliders are offered under `glider`, which is
+   *  true, rather than under a class nobody established. */
   cls: string;
   plr: string;
   refMassKg: number;
   wingAreaM2: number | null;
+  /** The wingspan, where soaring-data establishes one — from the aircraft's EASA type certificate,
+   *  from its Wikipedia infobox, or from the polar file's own name. Null for the rest, and null is
+   *  the honest answer: 46 of these wings have no span anybody could corroborate. */
+  spanM: number | null;
 }
 
 /** The order the groups are offered in. A group the data grows and this list does not name still
  *  appears — at the end — rather than vanishing from the picker: a glider the pilot cannot reach is
  *  worse than one in an unexpected place. */
-const GROUP_ORDER = ['13.5m', '18m', 'open', 'glider', 'paraglider', 'hang_glider'];
+const GROUP_ORDER = ['13.5m', '18m', 'open', 'glider', 'paraglider', 'hang_glider', 'microlight'];
 
 const cells = (line: string): string[] => {
   const out: string[] = [];
@@ -129,13 +144,20 @@ export function parseGliderLibrary(csv: string): GliderPolar[] {
 
     const fai = (at(r, 'fai_class') ?? '').trim();
     const wing = (at(r, 'wing_class') ?? '').trim();
+    // The model, and never the file name. A row with no model is a row from a package too old to
+    // carry one, and its own name is the only thing left to show — but it is a fallback, not a
+    // choice.
+    const model = (at(r, 'model') ?? '').replace(/^"|"$/g, '').trim();
     out.push({
       id,
       name,
+      model: model !== '' ? model : name,
+      manufacturer: (at(r, 'manufacturer') ?? '').replace(/^"|"$/g, '').trim(),
       cls: fai !== '' ? fai : (wing !== '' ? wing : 'glider'),
       plr,
       refMassKg: mass,
       wingAreaM2: num(at(r, 'wing_area_m2')),
+      spanM: num(at(r, 'span_m')),
     });
   }
 
@@ -156,6 +178,62 @@ export function groupLibrary(lib: readonly GliderPolar[]): { cls: string; entrie
     return i < 0 ? GROUP_ORDER.length : i;
   };
   return groups.sort((a, b) => rank(a.cls) - rank(b.cls));
+}
+
+/** The gliders grouped by WHO BUILT THEM, which is how a pilot looks for his own.
+ *
+ *  The FAI-class grouping above put 106 wings in a single list called `glider`, and a pilot hunting
+ *  for his ASW 20 in a scrolling native `<select>`, in flight, with gloves, was expected to find it.
+ *  He does not think "Standard class". He thinks "Schleicher".
+ *
+ *  The manufacturer's LEGAL NAME is what the data holds, faithfully — `Alexander Schleicher GmbH &
+ *  Co`, because that is what Wikidata's P176 says and a dataset does not paraphrase its sources. It
+ *  is used here as a HEADING, once, above the nineteen gliders it built, instead of being repeated
+ *  nineteen times beside them. The awkward name is the group's problem to carry, not the pilot's.
+ *
+ *  The 66 wings whose maker the commons does not name are grouped last, under the empty string. They
+ *  are not hidden and they are not invented a maker: they are simply the ones we do not know. */
+/** What the pilot reads for ONE entry — the model, plus whatever actually distinguishes it from a
+ *  sibling that shares its name.
+ *
+ *  Stripping `(PAS)`, `(PIL)`, `(15m)` and `(17m)` off the polar file names made the picker readable
+ *  and made it LIE: the Schleicher group offered `ASH-25` twice and the DG group offered `DG-400`
+ *  twice, and a pilot picking one of the two had no way to know which. The suffixes were ugly, and
+ *  they were carrying a fact — these are DIFFERENT POLARS. One ASH-25 is loaded with a passenger and
+ *  one is not; one DG-400 has 15 metres of wing and the other has 17. Getting it wrong is a final
+ *  glide computed against the wrong curve.
+ *
+ *  So a duplicate model is disambiguated by what actually differs, in the units a pilot thinks in:
+ *  the SPAN first (it changes the curve most), the reference MASS second. A glider whose name is
+ *  unique gets nothing appended: the disambiguator appears exactly where it is needed and nowhere
+ *  else. */
+export function entryLabel(g: GliderPolar, siblings: readonly GliderPolar[]): string {
+  const twins = siblings.filter(x => x.model === g.model);
+  if (twins.length < 2) return g.model;
+
+  const spans = new Set(twins.map(x => x.spanM));
+  if (g.spanM !== null && spans.size > 1) return `${g.model} — ${g.spanM} m`;
+
+  const masses = new Set(twins.map(x => x.refMassKg));
+  if (masses.size > 1) return `${g.model} — ${g.refMassKg} kg`;
+
+  // Identical model, identical span, identical mass: two rows the data cannot tell apart either.
+  // Better a visible index than two entries a pilot must choose between blind.
+  return `${g.model} (${twins.indexOf(g) + 1})`;
+}
+
+export function byManufacturer(lib: readonly GliderPolar[]): { maker: string; entries: GliderPolar[] }[] {
+  const groups: { maker: string; entries: GliderPolar[] }[] = [];
+  for (const g of lib) {
+    const found = groups.find(x => x.maker === g.manufacturer);
+    if (found === undefined) groups.push({ maker: g.manufacturer, entries: [g] });
+    else found.entries.push(g);
+  }
+  for (const g of groups) g.entries.sort((a, b) => a.model.localeCompare(b.model));
+  // Named makers first, alphabetically; the unknown ones last, where they cannot be mistaken for a
+  // manufacturer called nothing.
+  return groups.sort((a, b) =>
+    (a.maker === '' ? 1 : 0) - (b.maker === '' ? 1 : 0) || a.maker.localeCompare(b.maker));
 }
 
 /** The shipped library: the soaring-data polars package, read once at load.

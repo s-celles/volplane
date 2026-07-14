@@ -83,12 +83,39 @@ test('CFG-003: the presets fill every row at once, and each is one act', () => {
 
 // ---- CFG-002 ----
 
-test('CFG-002: every library glider appears exactly once, grouped by class', () => {
+test('CFG-002: every library glider appears exactly once, grouped by WHO BUILT IT', () => {
+  // It used to group by FAI class, which put 106 wings in a single list called `glider`. A pilot
+  // hunting for his ASW 20 in a scrolling native <select>, in flight, with gloves, was expected to
+  // find it there. He does not think "Standard class". He thinks "Schleicher".
   const html = gliderHtml(settings(), t);
   for (const g of GLIDER_LIBRARY) expect(count(html, `data-id="${g.id}"`)).toBe(1);
-  const classes = [...new Set(GLIDER_LIBRARY.map(g => g.cls))];
-  for (const cls of classes) expect(count(html, `<optgroup label="${cls}">`)).toBe(1);
-  expect(count(html, '<optgroup')).toBe(classes.length);
+  const makers = [...new Set(GLIDER_LIBRARY.map(g => g.manufacturer))];
+  expect(count(html, '<optgroup')).toBe(makers.length);
+  expect(html).toContain('<optgroup label="Alexander Schleicher GmbH &amp; Co">');
+  // The biggest group is now a list a hand can land on, not a haystack.
+  const biggest = Math.max(...makers.filter(m => m !== '')
+    .map(m => GLIDER_LIBRARY.filter(g => g.manufacturer === m).length));
+  expect(biggest).toBeLessThan(40);
+});
+
+test('the pilot reads the AIRCRAFT, never the polar file', () => {
+  // LK8000 wrote `Antares_18S`, and `ASH-25 (PAS)` — PAS means "with a passenger", which is how the
+  // glider is FLOWN, not what it IS. And, offered to a pilot as an aircraft: `Discus B from Cumulus
+  // Soaring GN II`, the name of the WEBSITE that distributed the file. This was on the screen.
+  const html = gliderHtml(settings(), t);
+  expect(html).not.toContain('Cumulus Soaring');
+  expect(html).not.toContain('_18S');
+  expect(html).not.toContain('(PAS)');
+  expect(html).toContain('>Antares 18S<');
+  // The ASH-25 appears twice — one loaded with a passenger, one not — so it carries the loading that
+  // tells them apart. The suffix that was stripped was ugly AND was carrying a fact.
+  expect(html).toMatch(/>ASH-25 — \d+ kg</);
+});
+
+test('a maker the commons does not name says so — an empty heading reads as a bug', () => {
+  const html = gliderHtml(settings(), t);
+  expect(html).not.toContain('<optgroup label="">');
+  expect(html).toContain(t('settings.glider.unknownMaker'));
 });
 
 test('CFG-002: the picked glider is selected, and its reference mass is the placeholder', () => {

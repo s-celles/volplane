@@ -55,6 +55,7 @@ export const FR: Record<MsgId, string> = {
   'settings.glider': 'Planeur',
   'settings.glider.library': 'Bibliothèque',
   'settings.glider.mass': 'Masse en vol',
+  'settings.glider.unknownMaker': 'constructeur non renseigné',
   'settings.glider.refMass': 'Masse de référence',
   'settings.glider.massBand': 'Polaire publiée à {ref} {unit} — accepte {min} à {max} {unit}',
   'settings.glider.imported': 'importé',
