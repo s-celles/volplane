@@ -46,6 +46,8 @@ export const FR: Record<MsgId, string> = {
 
   // ---- settings (CFG-002 / CFG-003) ----
   'settings.title': 'Réglages',
+  'settings.setup': 'Réglages au sol',
+  'settings.source': 'L\u2019instrument',
   'settings.language': 'Langue',
   'settings.units': 'Unités',
   'settings.preset': 'Préréglage',

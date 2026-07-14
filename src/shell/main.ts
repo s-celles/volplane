@@ -174,6 +174,8 @@ root.innerHTML = `
   <div id="settings" hidden></div>
 `;
 const app = root.querySelector<HTMLElement>('#fly')!;
+const setEl = root.querySelector<HTMLElement>('#settings')!;
+
 const bf = root.querySelector<HTMLElement>('#briefing')!;
 
 // ============ the Fly screen — Phase 0's six numbers + Phase 2's computer ============
@@ -201,67 +203,93 @@ const notYet = missingLinks(platform);
 // label the catalogue cannot reach, and the one thing worse than an untranslated label is one that
 // looks translated because the tab above it is.
 app.innerHTML = `
-  <h1>VOLPLANE</h1>
   <div id="fly-view"></div>
-  <form id="fly-set" class="fly-set">
+  <form id="fly-controls" class="fly-controls">
     <label><span data-i18n="fly.mc"></span> <input id="set-mc" size="3" value="1.0" inputmode="decimal" /> m/s</label>
-    <label><span data-i18n="fly.qnh"></span> <input id="set-qnh" size="5" value="1013.25" inputmode="decimal" /> hPa</label>
-    <label><span data-i18n="fly.reserve"></span> <input id="set-reserve" size="4" value="200" inputmode="numeric" /> m</label>
-    <label data-i18n-title="fly.horizon.title"><span data-i18n="fly.horizon"></span>
-      <input id="set-horizon" size="3" value="60" inputmode="numeric" /> s</label>
     <button id="set-goal" type="button" data-i18n="fly.goalHere" data-i18n-title="fly.goalHere.title"></button>
     <span id="goal-label" class="goal-label"></span>
     <button id="rec" type="button" data-i18n-title="fly.record.title"></button>
-    <label class="replay"><span data-i18n="fly.airspaceFile"></span> <input id="oa" type="file" accept=".txt,.openair" /></label>
-    <span id="oa-label" class="goal-label"></span>
-    <label class="replay" data-i18n-title="fly.taskFile.title"><span data-i18n="fly.taskFile"></span>
-      <input id="tsk" type="file" accept=".csv,.txt" /></label>
-    <span id="tsk-label" class="goal-label"></span>
-    <label class="replay" data-i18n-title="fly.taskTime.title"><span data-i18n="fly.taskTime"></span>
-      <input id="set-mintime" size="4" value="" inputmode="numeric" /> min</label>
-    <label class="replay" data-i18n-title="fly.polarFile.title"><span data-i18n="fly.polarFile"></span>
-      <input id="plr" type="file" accept=".plr,.txt" /></label>
-    <span id="plr-label" class="polar-label"></span>
-    <button id="plr-default" type="button" data-i18n="fly.polarDefaultBtn" data-i18n-title="fly.polarDefaultBtn.title"></button>
-    <label class="replay" data-i18n-title="fly.landablesFile.title"><span data-i18n="fly.landablesFile"></span>
-      <input id="cup" type="file" accept=".cup,.txt" /></label>
-    <span id="cup-label" class="goal-label"></span>
-    <div id="lnd-filter-slot"></div>
-    <label class="replay" data-i18n-title="fly.alertClasses.title"><span data-i18n="fly.alertClasses"></span>
-      <input id="set-classes" size="10" placeholder="all" /></label>
+    <button id="audio-on" type="button" data-i18n-title="fly.audio.title"></button>
+    <label><input id="audio-stf" type="checkbox" /> <span data-i18n="fly.stfMode"></span></label>
   </form>
-  <div class="canvas-frame map-frame">
-    <canvas id="map" width="480" height="480"></canvas>
+  <div class="map-frame">
+    <canvas id="map"></canvas>
     <div class="map-zoom">
       <button id="zoom-in" type="button">+</button>
       <button id="zoom-out" type="button">−</button>
     </div>
   </div>
-  <div id="xsection" class="xsection-frame"></div>
-  <div id="rose" class="rose-frame"></div>
-  <form id="audio-set" class="fly-set">
-    <button id="audio-on" type="button" data-i18n-title="fly.audio.title"></button>
-    <label><input id="audio-stf" type="checkbox" /> <span data-i18n="fly.stfMode"></span></label>
-  </form>
-  <form id="connect">
-    <select id="linksel">${offered.map(l => `<option value="${l}">${l.toUpperCase()}</option>`).join('')}</select>
-    <input id="host" value="127.0.0.1" size="12" />
-    <input id="port" value="4353" size="5" />
-    <select id="driver" title="ACQ-003: Condor 2 and 3 disagree on the LXWP0 wind direction — the driver is a claim about the instrument, not a preference">
-      <option value="condor2">Condor 2</option>
-      <option value="condor3">Condor 3</option>
-      <option value="generic">generic NMEA</option>
-    </select>
-    <button type="submit">Connect</button>
-    <label class="replay">or replay an IGC file <input id="igc" type="file" accept=".igc" /></label>
-  </form>
-  <div class="link">Condor: Setup → Options → NMEA output → TCP, port 4353.${
-    notYet.length ? ` Not yet drivable in this build: ${notYet.join(', ')}.` : ''}</div>
+  <div id="fly-aside">
+    <div id="xsection" class="xsection-frame"></div>
+    <div id="rose" class="rose-frame"></div>
+  </div>
 `;
-const flyView = app.querySelector<HTMLElement>('#fly-view')!;
-const roseEl = app.querySelector<HTMLElement>('#rose')!;
-const linkSel = app.querySelector<HTMLSelectElement>('#linksel')!;
-const hostIn = app.querySelector<HTMLInputElement>('#host')!;
+
+// ---- the SETUP, which is not flying ----
+//
+// Everything below used to sit on the Fly screen, between the pilot and his map: the QNH, the
+// reserve, the terrain horizon, four file pickers, the alert classes, and the CONNECT form. Opening
+// the app and looking at it — the thing 556 tests could never do — showed the flight screen was
+// 1922 pixels tall in an 865-pixel window, the map was a 480×480 square in a 1651-pixel-wide window,
+// and Connect was BELOW THE FOLD. To connect a flight computer, you scrolled.
+//
+// None of it is touched in the air. A QNH is set once. A polar is chosen once. A cable is plugged in
+// once, on the ground, before the canopy closes. What a pilot touches IN FLIGHT is the MacCready
+// setting, the page, the zoom, the audio, and the goal — and that is what is left above.
+//
+// The elements keep their ids and their listeners: they moved house, they did not change.
+setEl.innerHTML = `
+  <div id="settings-panel"></div>
+  <section class="settings-section">
+    <h3 data-i18n="settings.setup"></h3>
+    <form id="setup" class="fly-set">
+      <label><span data-i18n="fly.qnh"></span> <input id="set-qnh" size="5" value="1013.25" inputmode="decimal" /> hPa</label>
+      <label><span data-i18n="fly.reserve"></span> <input id="set-reserve" size="4" value="200" inputmode="numeric" /> m</label>
+      <label data-i18n-title="fly.horizon.title"><span data-i18n="fly.horizon"></span>
+        <input id="set-horizon" size="3" value="60" inputmode="numeric" /> s</label>
+      <label class="replay"><span data-i18n="fly.airspaceFile"></span> <input id="oa" type="file" accept=".txt,.openair" /></label>
+      <span id="oa-label" class="goal-label"></span>
+      <label class="replay" data-i18n-title="fly.taskFile.title"><span data-i18n="fly.taskFile"></span>
+        <input id="tsk" type="file" accept=".csv,.txt" /></label>
+      <span id="tsk-label" class="goal-label"></span>
+      <label class="replay" data-i18n-title="fly.taskTime.title"><span data-i18n="fly.taskTime"></span>
+        <input id="set-mintime" size="4" value="" inputmode="numeric" /> min</label>
+      <label class="replay" data-i18n-title="fly.polarFile.title"><span data-i18n="fly.polarFile"></span>
+        <input id="plr" type="file" accept=".plr,.txt" /></label>
+      <span id="plr-label" class="polar-label"></span>
+      <button id="plr-default" type="button" data-i18n="fly.polarDefaultBtn" data-i18n-title="fly.polarDefaultBtn.title"></button>
+      <label class="replay" data-i18n-title="fly.landablesFile.title"><span data-i18n="fly.landablesFile"></span>
+        <input id="cup" type="file" accept=".cup,.txt" /></label>
+      <span id="cup-label" class="goal-label"></span>
+      <div id="lnd-filter-slot"></div>
+      <label class="replay" data-i18n-title="fly.alertClasses.title"><span data-i18n="fly.alertClasses"></span>
+        <input id="set-classes" size="10" placeholder="all" /></label>
+    </form>
+  </section>
+  <section class="settings-section">
+    <h3 data-i18n="settings.source"></h3>
+    <form id="connect">
+      <select id="linksel">${offered.map(l => `<option value="${l}">${l.toUpperCase()}</option>`).join('')}</select>
+      <input id="host" value="127.0.0.1" size="12" />
+      <input id="port" value="4353" size="5" />
+      <select id="driver" title="ACQ-003: Condor 2 and 3 disagree on the LXWP0 wind direction — the driver is a claim about the instrument, not a preference">
+        <option value="condor2">Condor 2</option>
+        <option value="condor3">Condor 3</option>
+        <option value="generic">generic NMEA</option>
+      </select>
+      <button type="submit">Connect</button>
+      <label class="replay">or replay an IGC file <input id="igc" type="file" accept=".igc" /></label>
+    </form>
+    <div class="link">Condor: Setup → Options → NMEA output → TCP, port 4353.${
+      notYet.length ? ` Not yet drivable in this build: ${notYet.join(', ')}.` : ''}</div>
+  </section>
+`;
+
+const panelEl = root.querySelector<HTMLElement>('#settings-panel')!;
+const flyView = root.querySelector<HTMLElement>('#fly-view')!;
+const roseEl = root.querySelector<HTMLElement>('#rose')!;
+const linkSel = root.querySelector<HTMLSelectElement>('#linksel')!;
+const hostIn = root.querySelector<HTMLInputElement>('#host')!;
 // UDP listens; it has no host to ask for. The field follows the selected link.
 linkSel.onchange = () => { hostIn.hidden = linkSel.value === 'udp'; };
 
@@ -402,7 +430,7 @@ function resetFlight(): void {
  *  setting. The reserve and MC keep no minimum — a pilot may legitimately fly MC 0, and a reserve
  *  of 0 m is a choice, if a bold one, that he has to type on purpose. */
 const setting = (id: string, fallback: number, min?: number): number =>
-  fieldNumber((app.querySelector(id) as HTMLInputElement).value, fallback, min);
+  fieldNumber((root.querySelector(id) as HTMLInputElement).value, fallback, min);
 
 /** The organisers' task time, in seconds — and the one setting on this screen that has no
  *  fallback, because there is nothing to fall back TO. Every other field here has a defensible
@@ -412,7 +440,7 @@ const setting = (id: string, fallback: number, min?: number): number =>
  *  speed against it. The AAT figures dash out instead, which is the app admitting it was not
  *  told (POT-007). */
 function minTaskTimeS(): number | null {
-  const raw = (app.querySelector('#set-mintime') as HTMLInputElement).value.trim();
+  const raw = (root.querySelector('#set-mintime') as HTMLInputElement).value.trim();
   if (raw === '') return null;
   const min = Number(raw);
   return Number.isFinite(min) && min > 0 ? min * 60 : null;
@@ -456,8 +484,27 @@ function taskHtml(s: NavState): string {
 /** CAR + TER-005: repaint the canvas from the current state. Called from render, cheap at
  *  1 Hz — the reach march is 72 bearings over a cached tile lookup. */
 function repaintMap(s: NavState, stale: boolean): void {
-  const canvasEl = app.querySelector<HTMLCanvasElement>('#map');
+  const canvasEl = root.querySelector<HTMLCanvasElement>('#map');
   if (!canvasEl) return;
+
+  // THE CANVAS FOLLOWS ITS FRAME. It used to be `<canvas width=480 height=480>` — a fixed square, in
+  // a window that is whatever the pilot's screen is. CSS could stretch the PICTURE, but a canvas's
+  // backing store is its `width`/`height` attributes, so stretching it only blurs it. The size has to
+  // be set here, in pixels, from the box the layout actually gave it.
+  //
+  // devicePixelRatio is not a nicety: on a Retina display, a 1:1 canvas is drawn at half resolution
+  // and every line the pilot reads in sunlight is soft. And the ratio is CLAMPED at 2 — beyond that
+  // the gain is invisible and the cost is real, and this repaint runs at 1 Hz with a 72-bearing
+  // terrain march behind it.
+  const box = canvasEl.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.round(box.width * dpr));
+  const h = Math.max(1, Math.round(box.height * dpr));
+  if (canvasEl.width !== w || canvasEl.height !== h) {
+    canvasEl.width = w;
+    canvasEl.height = h;
+  }
+
   const ctx = canvasEl.getContext('2d') as unknown as MapPaint2D;
   const centre = s.fix ? { lon: s.fix.lon, lat: s.fix.lat } : { lon: 8, lat: 47 };
   const view: MapView = { centre, widthM: mapWidthM, wPx: canvasEl.width, hPx: canvasEl.height };
@@ -500,7 +547,7 @@ function repaintMap(s: NavState, stale: boolean): void {
   }, t);
 
   // ANA-002: the slice straight ahead — the dimension the plan view flattens away.
-  const xs = app.querySelector<HTMLElement>('#xsection');
+  const xs = root.querySelector<HTMLElement>('#xsection');
   if (xs && s.fix?.alt != null && s.track != null) {
     xs.innerHTML = xsectionSvg({
       lon: s.fix.lon, lat: s.fix.lat, bearing: s.track, altM: s.fix.alt,
@@ -647,13 +694,13 @@ function render(s: NavState, link: LinkState): void {
   repaintMap(s, stale);
 }
 
-(app.querySelector('#connect') as HTMLFormElement).onsubmit = e => {
+(root.querySelector('#connect') as HTMLFormElement).onsubmit = e => {
   e.preventDefault();
-  const port = Number((app.querySelector('#port') as HTMLInputElement).value);
-  driver = (app.querySelector('#driver') as HTMLSelectElement).value as Driver;
+  const port = Number((root.querySelector('#port') as HTMLInputElement).value);
+  driver = (root.querySelector('#driver') as HTMLSelectElement).value as Driver;
   void run(linkSel.value === 'udp' ? udpDevice(port) : tcpDevice(hostIn.value, port));
 };
-(app.querySelector('#igc') as HTMLInputElement).onchange = async e => {
+(root.querySelector('#igc') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
   // ACQ-010, through the front door: the file becomes sentences, and from here on the
@@ -662,12 +709,12 @@ function render(s: NavState, link: LinkState): void {
   const sentences = igcToSentences(await f.text());
   void run({ id: `replay:${f.name}`, label: f.name, link: 'replay', open: replaySource(sentences, 100) });
 };
-(app.querySelector('#set-goal') as HTMLButtonElement).onclick = () => {
+(root.querySelector('#set-goal') as HTMLButtonElement).onclick = () => {
   // The goal is where the glider IS, at the ground the DEM knows there. No fix or no ground
   // means no goal — a final glide to an invented elevation is exactly the number PLA-004
   // must never show.
   if (!state.fix || state.groundElev == null) {
-    (app.querySelector('#goal-label') as HTMLElement).textContent = t('fly.noGoalNeedFix');
+    (root.querySelector('#goal-label') as HTMLElement).textContent = t('fly.noGoalNeedFix');
     return;
   }
   goal = { lon: state.fix.lon, lat: state.fix.lat, elev: state.groundElev };
@@ -696,12 +743,12 @@ function adoptCup(text: string): string | null {
   return `${f.pois.length} points, ${cupLandables} landable${
     f.refused ? `, ${f.refused} rows refused` : ''}`;
 }
-(app.querySelector('#cup') as HTMLInputElement).onchange = async e => {
+(root.querySelector('#cup') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
   const text = await f.text();
   const label = adoptCup(text);
-  (app.querySelector('#cup-label') as HTMLElement).textContent = label ?? t('fly.cupRefused');
+  (root.querySelector('#cup-label') as HTMLElement).textContent = label ?? t('fly.cupRefused');
   // OFF-002, and the same refusal discipline as the task: a file that yielded nothing is not a
   // database of fields, and it must not come back next launch posing as one.
   if (label) void saveFlightFile(kv, 'landables', { name: f.name, text });
@@ -717,13 +764,21 @@ const visibleAlts = (all: readonly Alternate[]): Alternate[] =>
  *  judges, only which fields core is asked about. */
 function readStyleFilter(): PoiCat[] | null {
   const on = LANDABLE_CATS.filter(
-    c => app.querySelector<HTMLInputElement>(`#lnd-style-${c}`)?.checked);
+    c => root.querySelector<HTMLInputElement>(`#lnd-style-${c}`)?.checked);
   return on.length === LANDABLE_CATS.length ? null : on;
 }
-app.querySelector<HTMLFormElement>('#fly-set')!.oninput = () => {
-  styleFilter = readStyleFilter();
-  render(state, link);
-};
+// The landable-style checkboxes moved to Settings with the rest of the setup, and this listener
+// hung on the form that used to hold everything. It hangs on BOTH now — the one the pilot flies with
+// and the one he sets up with — because the numbers it reads are spread across the two, and a
+// listener that misses one of them is a control that silently does nothing.
+for (const id of ['#fly-controls', '#setup']) {
+  const form = root.querySelector<HTMLFormElement>(id);
+  if (form === null) continue;
+  form.oninput = () => {
+    styleFilter = readStyleFilter();
+    render(state, link);
+  };
+}
 // ESP-004: the ack rides the shelfEl pattern — ONE delegated listener on the container that
 // is built once, because the alert rows under it repaint every second. The ack is keyed, not
 // indexed: between the paint and the tap the row order may have changed, but the key still
@@ -746,7 +801,7 @@ flyView.onclick = e => {
   acks = acknowledge(acks, space, state.fix.sod);
   render(state, link);
 };
-(app.querySelector('#rec') as HTMLButtonElement).onclick = async e => {
+(root.querySelector('#rec') as HTMLButtonElement).onclick = async e => {
   const btn = e.target as HTMLButtonElement;
   if (!logger) {
     // openJournal below claims the 'journal/' prefix WHOLE — including the fixes a
@@ -779,7 +834,7 @@ flyView.onclick = e => {
   a.click();
   URL.revokeObjectURL(a.href);
   if (j) await j.discard();
-  (app.querySelector('#oa-label') as HTMLElement).textContent = t('fly.savedFixes', { n });
+  (root.querySelector('#oa-label') as HTMLElement).textContent = t('fly.savedFixes', { n });
 };
 /** TSK: adopt a task from CSV text — one waypoint per line, "name,lon,lat" with an optional
  *  fourth field "aat" marking that point an assigned area (TSK-003). Lines that fail to
@@ -827,12 +882,12 @@ function adoptTask(text: string): string | null {
   return `${wps.length} points, ${task.rules}${areas ? `, ${areas} assigned area${areas > 1 ? 's' : ''}` : ''}${
     refused ? `, ${refused} lines refused` : ''}`;
 }
-(app.querySelector('#tsk') as HTMLInputElement).onchange = async e => {
+(root.querySelector('#tsk') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
   const text = await f.text();
   const label = adoptTask(text);
-  (app.querySelector('#tsk-label') as HTMLElement).textContent = label ?? t('fly.taskRefused');
+  (root.querySelector('#tsk-label') as HTMLElement).textContent = label ?? t('fly.taskRefused');
   // OFF-002: the task survives the restart — saved as the RAW text, and only once adopted:
   // a file refused above is not a task, and must not come back next launch as one.
   if (label) void saveFlightFile(kv, 'task', { name: f.name, text });
@@ -847,8 +902,8 @@ const polarName = (): string => {
   if (lib) return lib.name;
   return t('fly.polarDefault', { name: DEFAULT_POLAR.name });
 };
-const plrLabel = app.querySelector('#plr-label') as HTMLElement;
-(app.querySelector('#plr') as HTMLInputElement).onchange = async e => {
+const plrLabel = root.querySelector('#plr-label') as HTMLElement;
+(root.querySelector('#plr') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
   // The normalizer IS the gatekeeper: repairPolar runs the file through parsePlr and nulls
@@ -865,7 +920,7 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
   applySettings({ polar: next.polar, glider: null });
   plrLabel.textContent = polarName();
 };
-(app.querySelector('#plr-default') as HTMLButtonElement).onclick = () => {
+(root.querySelector('#plr-default') as HTMLButtonElement).onclick = () => {
   applySettings({ polar: null });
   plrLabel.textContent = polarName();
 };
@@ -873,7 +928,7 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
 // must not mute anything — and echoed back normalized (trimmed, uppercase, deduped), so the
 // input always shows exactly the filter that rules. Empty means all: silence is chosen per
 // class, never defaulted into.
-(app.querySelector('#set-classes') as HTMLInputElement).onchange = e => {
+(root.querySelector('#set-classes') as HTMLInputElement).onchange = e => {
   const el = e.target as HTMLInputElement;
   const raw = el.value.trim();
   applySettings({ monitoredClasses: raw === '' ? null : raw.split(',') });
@@ -882,7 +937,7 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
 // VAR-004: the browser refuses sound before a gesture, and that refusal is not a bug to work
 // around — this button IS the gesture. A platform with no audio out says so (the spec's own
 // "LÀ OÙ une sortie audio est disponible") rather than pretending to sing.
-(app.querySelector('#audio-on') as HTMLButtonElement).onclick = e => {
+(root.querySelector('#audio-on') as HTMLButtonElement).onclick = e => {
   const btn = e.target as HTMLButtonElement;
   if (audio?.running) {
     audio.stop();
@@ -893,8 +948,8 @@ const plrLabel = app.querySelector('#plr-label') as HTMLElement;
   audio = openAudio();
   btn.textContent = audio ? t('fly.audioOn') : t('fly.audioNone');
 };
-(app.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => { mapWidthM = Math.max(2000, mapWidthM / 1.5); render(state, link); };
-(app.querySelector('#zoom-out') as HTMLButtonElement).onclick = () => { mapWidthM = Math.min(200_000, mapWidthM * 1.5); render(state, link); };
+(root.querySelector('#zoom-in') as HTMLButtonElement).onclick = () => { mapWidthM = Math.max(2000, mapWidthM / 1.5); render(state, link); };
+(root.querySelector('#zoom-out') as HTMLButtonElement).onclick = () => { mapWidthM = Math.min(200_000, mapWidthM * 1.5); render(state, link); };
 /** ESP: adopt an OpenAir file's text. ESP-001's display starts as words; the map (CAR) draws
  *  them. Refusals are COUNTED out loud — a volume silently dropped is a TMA the pilot thinks
  *  is loaded. One parse path for the file input and the restore (OFF-002), like adoptTask.
@@ -915,12 +970,12 @@ function adoptAirspace(text: string): { adopted: boolean; label: string } {
       + (refused ? t('fly.airspaceRefusedSome', { n: refused }) : ''),
   };
 }
-(app.querySelector('#oa') as HTMLInputElement).onchange = async e => {
+(root.querySelector('#oa') as HTMLInputElement).onchange = async e => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f) return;
   const text = await f.text();
   const r = adoptAirspace(text);
-  (app.querySelector('#oa-label') as HTMLElement).textContent = r.label;
+  (root.querySelector('#oa-label') as HTMLElement).textContent = r.label;
   if (r.adopted) void saveFlightFile(kv, 'airspace', { name: f.name, text });
   render(state, link);
 };
@@ -1056,7 +1111,7 @@ async function run(dev: Device): Promise<void> {
       // sitting on top of the tested one.
       if (audio?.running) {
         const d = derive(state, polar, setting('#set-qnh', 1013.25, 1));
-        const stfMode = (app.querySelector('#audio-stf') as HTMLInputElement).checked;
+        const stfMode = (root.querySelector('#audio-stf') as HTMLInputElement).checked;
         const cruise = stfMode && d.tas != null
           ? stfTone(d.tas - speedToFly(polar, setting('#set-mc', 1), d.netto ?? 0))
           : varioTone(state.vario);
@@ -1369,7 +1424,7 @@ async function fetchEntry(e: CatalogueEntry): Promise<void> {
     await saveFlightFile(kv, 'airspace', { name: `${e.id} (${e.name})`, text });
     await putJson(kv, REPO_HELD_KEY, repoHeld);
     const r2 = adoptAirspace(text);
-    (app.querySelector('#oa-label') as HTMLElement).textContent =
+    (root.querySelector('#oa-label') as HTMLElement).textContent =
       t('fly.fromRepository', { label: r2.label });
     repoStatusEl.textContent = `${e.name}: ${r2.label}`;
     renderRepo();
@@ -1710,27 +1765,27 @@ function renderChrome(): void {
  *  four controls whose text is a function of STATE rather than of markup. The inputs themselves are
  *  never touched — what he typed stays typed, and the file he picked stays picked. */
 function renderFlyChrome(): void {
-  for (const el of app.querySelectorAll<HTMLElement>('[data-i18n]'))
+  for (const el of root.querySelectorAll<HTMLElement>('[data-i18n]'))
     el.textContent = t(el.dataset.i18n!);
-  for (const el of app.querySelectorAll<HTMLElement>('[data-i18n-title]'))
+  for (const el of root.querySelectorAll<HTMLElement>('[data-i18n-title]'))
     el.title = t(el.dataset.i18nTitle!);
 
   // State, not markup: these four say what the app is DOING, and the sentence must be re-derived
   // rather than remembered — a remembered sentence is the old language's sentence.
-  const goalLabel = app.querySelector<HTMLElement>('#goal-label')!;
+  const goalLabel = root.querySelector<HTMLElement>('#goal-label')!;
   goalLabel.textContent = goal === null
     ? t('fly.noGoal')
     : t('fly.goalAt', {
         lat: goal.lat.toFixed(3), lon: goal.lon.toFixed(3),
         elev: formatText(goal.elev, 'altitude', settings.units.altitude),
       });
-  app.querySelector<HTMLElement>('#rec')!.textContent =
+  root.querySelector<HTMLElement>('#rec')!.textContent =
     logger === null ? t('fly.record') : t('fly.stopSave');
-  app.querySelector<HTMLElement>('#audio-on')!.textContent =
+  root.querySelector<HTMLElement>('#audio-on')!.textContent =
     audio?.running ? t('fly.audioOn') : t('fly.audioOff');
   // LND-008's four boxes carry the category names, which are catalogue words too. The filter STATE
   // is passed back in, so repainting the words cannot silently untick a box the pilot ticked.
-  app.querySelector<HTMLElement>('#lnd-filter-slot')!.innerHTML = styleFilterHtml(styleFilter, t);
+  root.querySelector<HTMLElement>('#lnd-filter-slot')!.innerHTML = styleFilterHtml(styleFilter, t);
 }
 
 function showTab(which: 'fly' | 'briefing' | 'analysis' | 'settings'): void {
@@ -1872,10 +1927,12 @@ function renderAnalysis(): void {
 // screen and the settings disagree, and CFG-005's promise ("what he chooses is what he flies with
 // tomorrow") has no room for such a moment.
 
-const setEl = root.querySelector<HTMLElement>('#settings')!;
 
+/** ONLY the panel. The setup form and the connect form live in #settings too, and they are STATIC:
+ *  their listeners were bound once, at start-up, and a repaint that replaced them would leave a
+ *  screen full of dead controls — the exact bug the review found in the settings panel itself. */
 function renderSettings(): void {
-  setEl.innerHTML = settingsHtml(settings, t);
+  panelEl.innerHTML = settingsHtml(settings, t);
 }
 
 /** Move a box within a page, or take it off. The REDUCER is core's (infobox.editPages) — pure,
@@ -1976,14 +2033,14 @@ setEl.onclick = onSettingsEvent;
 async function restoreFlightFiles(): Promise<void> {
   const oa = await loadFlightFile(kv, 'airspace');
   if (oa) {
-    (app.querySelector('#oa-label') as HTMLElement).textContent =
+    (root.querySelector('#oa-label') as HTMLElement).textContent =
       `${adoptAirspace(oa.text).label} (restored: ${oa.name})`;
   }
   const tk = await loadFlightFile(kv, 'task');
   if (tk) {
     const label = adoptTask(tk.text);
     if (label) {
-      (app.querySelector('#tsk-label') as HTMLElement).textContent =
+      (root.querySelector('#tsk-label') as HTMLElement).textContent =
         `${label} (restored: ${tk.name})`;
     }
   }
@@ -1991,7 +2048,7 @@ async function restoreFlightFiles(): Promise<void> {
   if (cf) {
     const label = adoptCup(cf.text);
     if (label) {
-      (app.querySelector('#cup-label') as HTMLElement).textContent =
+      (root.querySelector('#cup-label') as HTMLElement).textContent =
         `${label} (restored: ${cf.name})`;
     }
   }
@@ -2003,7 +2060,7 @@ async function restoreFlightFiles(): Promise<void> {
 // back with the shelf, before any screen rendered.
 function restoreSettings(): void {
   budgetIn.value = String(settings.cacheBudgetMB);
-  (app.querySelector('#set-classes') as HTMLInputElement).value =
+  (root.querySelector('#set-classes') as HTMLInputElement).value =
     settings.monitoredClasses?.join(', ') ?? '';
   plrLabel.textContent = polarName();
   // The language, the units, the pages and the glider came back with the record; the chrome and

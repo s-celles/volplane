@@ -46,6 +46,8 @@ export const EN = {
 
   // ---- settings (CFG-002 / CFG-003) ----
   'settings.title': 'Settings',
+  'settings.setup': 'Set up (not flying)',
+  'settings.source': 'The instrument',
   'settings.language': 'Language',
   'settings.units': 'Units',
   'settings.preset': 'Preset',
