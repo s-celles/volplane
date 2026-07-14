@@ -14,6 +14,7 @@ import { shadeGrid, type ShadeGrid, type ShadeView } from '../core/hillshade';
 import type { Alternate } from '../core/landables';
 import type { ElevSampler } from 'soaring-core/ports';
 import { mPerLng, M_PER_LAT } from 'soaring-core/geo';
+import { sectorOutline, type Task } from '../core/task';
 import { DEFAULT_UNITS, formatText, type UnitPrefs } from '../core/units';
 import type { T } from './infobox-ui';
 
@@ -31,6 +32,10 @@ export interface MapPaint2D extends Paint2D {
 
 export interface MapInput {
   state: NavState;
+  /** CAR-005: the active task, and which leg the pilot is on. `nextIndex` is TaskProgress.next — the
+   *  point he has yet to validate — and it is what decides which leg is drawn bright. Null when there
+   *  is no task, and the map simply does not draw one. */
+  task?: { task: Task; nextIndex: number | null } | null;
   trail: [number, number][];                       // recent fixes, oldest first
   spaces: readonly Airspace[];
   traffic: readonly Traffic[];
@@ -195,6 +200,104 @@ function paintTerrain(
   }
 }
 
+// ---- CAR-005: the task, and the shape of a turnpoint ----
+
+/** The colours the task is drawn in. The ACTIVE leg is the one the pilot is flying; the ones behind
+ *  him are dim, and the ones ahead are dimmer still — because a map that shouts every leg at once is
+ *  a map that says nothing about where he is. */
+const TASK_DONE = '#4a5568';        // behind him
+const TASK_AHEAD = '#7b8798';       // ahead
+const TASK_ACTIVE = '#e8eaed';      // the leg he is on
+
+/** CAR-005: the task on the map, with every sector drawn AS THE RULES DEFINE IT.
+ *
+ *  The task existed, it was validated, and its ribbon was rendered at the top of the screen — and the
+ *  pilot could not SEE it. That was the widest gap between what this app does and what it looks like
+ *  it does, and this closes it.
+ *
+ *  The sectors are NOT circles. A start is a GATE, standing across the course. A turnpoint may be a
+ *  cylinder or a ninety-degree FAI QUADRANT that opens AWAY from the task. A pilot shown a circle
+ *  where the rules put a quadrant flies to a place that LOOKS valid on his screen and validates
+ *  nothing — and finds out at the scoring desk.
+ *
+ *  So the outline is not drawn here. It comes from `core/task.sectorOutline`, which sits beside
+ *  `inSector` — the function that JUDGES the crossing — and a test flies a point across the drawn
+ *  outline and demands the rule agree with it at every step. The picture and the rule are one
+ *  description, not two kept in step by goodwill. */
+function paintTask(
+  ctx: MapPaint2D, view: View, task: Task, nextIndexIn: number | null, stale: boolean,
+): void {
+  const pts = task.points;
+  if (pts.length === 0) return;
+
+  // A TASK DOES NOT AGE, and drawing it as though it did was the first thing this painter got wrong.
+  //
+  // The airspace fades with the link. So do the reachable fields, and the numbers in the boxes, and
+  // they SHOULD: they describe a world that moves, and a dead source means we no longer know it. But
+  // a task is not an observation. It is a DECLARATION the pilot made, on the ground, and it is as
+  // true with the cable pulled as with it plugged in. Fading it says "this may be out of date", which
+  // is a lie about the one thing on this screen that cannot be.
+  //
+  // What DOES age is where he is ON it. Which leg is live depends on where he is, and with a silent
+  // link we do not know — so the highlight goes, and nothing takes its place. The task is drawn; the
+  // claim about his position in it is not.
+  const nextIndex = stale ? null : nextIndexIn;
+  ctx.globalAlpha = 1;
+
+  // The legs, first, so the sectors stand on them.
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = project(view, pts[i - 1].wp.lon, pts[i - 1].wp.lat);
+    const [x1, y1] = project(view, pts[i].wp.lon, pts[i].wp.lat);
+    const active = nextIndex !== null && i === nextIndex;
+    ctx.strokeStyle = active ? TASK_ACTIVE : (nextIndex !== null && i < nextIndex ? TASK_DONE : TASK_AHEAD);
+    ctx.lineWidth = active ? 2.5 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  }
+
+  // The sectors, each as its own shape.
+  for (let i = 0; i < pts.length; i++) {
+    const tp = pts[i];
+    const prev = i > 0 ? pts[i - 1].wp : null;
+    const next = i < pts.length - 1 ? pts[i + 1].wp : null;
+    const outline = sectorOutline(tp, prev, next);
+
+    const isNext = nextIndex !== null && i === nextIndex;
+    const done = nextIndex !== null && i < nextIndex;
+    ctx.strokeStyle = isNext ? TASK_ACTIVE : (done ? TASK_DONE : TASK_AHEAD);
+    ctx.lineWidth = isNext ? 2 : 1;
+
+    // A sector whose shape needs a leg it has not got is NOT drawn — see sectorOutline. The point is
+    // still marked, because the pilot must see that it EXISTS; what is not drawn is the promise of a
+    // shape we cannot honestly name.
+    if (outline !== null) {
+      const mPerLonHere = mPerLng(tp.wp.lat);
+      ctx.beginPath();
+      outline.forEach(([east, north], k) => {
+        const [x, y] = project(view, tp.wp.lon + east / mPerLonHere, tp.wp.lat + north / M_PER_LAT);
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    const [x, y] = project(view, tp.wp.lon, tp.wp.lat);
+    ctx.fillStyle = isNext ? TASK_ACTIVE : (done ? TASK_DONE : TASK_AHEAD);
+    ctx.beginPath();
+    ctx.arc(x, y, isNext ? 4 : 3, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // The name. Every point, not just the next one: a pilot reads his task off the map, and a task
+    // whose points are anonymous dots is a task he has to remember instead of see.
+    ctx.font = isNext ? 'bold 12px system-ui, sans-serif' : '11px system-ui, sans-serif';
+    ctx.fillText(tp.wp.name, x + 7, y - 6);
+  }
+
+  ctx.globalAlpha = 1;
+}
+
 /** LND-003, on the canvas. Every field wears its state's colour and nothing else decides it —
  *  core judged, the painter paints. The type is read from the ring: a gliding airfield is filled,
  *  an outlanding field is hollow. Only the TOP reachable field is named, because the map is not
@@ -332,7 +435,7 @@ function paintLandmarks(
 export function paintMap(ctx: MapPaint2D, view: View, input: MapInput, t: T): void {
   const {
     state: s, trail, spaces, traffic, goal, rangeM, reach, terrain, landables,
-    landableScope, stale = false, units = DEFAULT_UNITS,
+    landableScope, task, stale = false, units = DEFAULT_UNITS,
   } = input;
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#10141a';
@@ -423,6 +526,10 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput, t: T): vo
   // rings and their scope are one statement, and half of it drawn alone is the half that misleads.
   if (landables && landables.length > 0) paintLandables(ctx, view, landables, stale);
   if (landableScope && s.fix) paintLandableScope(ctx, view, s.fix, landableScope, stale, units, t);
+
+  // CAR-005. Over the ground and over the fields, under the glider: the task is what the pilot is
+  // FLYING, and the only thing that may sit on top of it is himself.
+  if (task) paintTask(ctx, view, task.task, task.nextIndex, stale);
 
   if (s.fix) {
     const [x, y] = project(view, s.fix.lon, s.fix.lat);

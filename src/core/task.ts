@@ -102,6 +102,72 @@ export function inSector(
   }
 }
 
+/** THE SECTOR, AS A SHAPE — the same geometry `inSector` judges by, and the map must draw.
+ *
+ *  Returned in METRES relative to the point: (east, north) offsets, which the painter projects. Null
+ *  where the shape needs a leg it has not got — a start line with nothing to stand across is a
+ *  misbuilt task, and drawing it as a giant cylinder would be the map inventing a rule.
+ *
+ *  ---- why this lives here, next to inSector, and not in the painter ----
+ *
+ *  A turnpoint is not a circle. It is a cylinder, or a GATE crossed perpendicular to the course, or a
+ *  ninety-degree FAI QUADRANT that opens AWAY from the task. A pilot shown a circle where the rules
+ *  put a quadrant will fly to a place that looks valid on his screen and validates nothing — and he
+ *  will find out at the scoring desk.
+ *
+ *  So the picture and the rule must not be two descriptions of the same thing, kept in step by
+ *  goodwill. They are one description, in one file, and the test below flies a point across the drawn
+ *  outline and asserts that `inSector` agrees with it at every step. If the shape ever drifts from
+ *  the rule, the build says so — which is the only way a pilot can trust what he is looking at. */
+export function sectorOutline(
+  tp: TaskPoint, prev: Waypoint | null, next: Waypoint | null,
+): [number, number][] | null {
+  const s = tp.sector;
+  // A bearing (degrees from north, clockwise) to an (east, north) unit vector.
+  const at = (brgDeg: number, r: number): [number, number] => {
+    const a = brgDeg * Math.PI / 180;
+    return [r * Math.sin(a), r * Math.cos(a)];
+  };
+
+  switch (s.kind) {
+    case 'cylinder':
+    case 'aatArea': {
+      const out: [number, number][] = [];
+      for (let i = 0; i < 64; i++) out.push(at(i * 360 / 64, s.radiusM));
+      return out;
+    }
+
+    case 'line': {
+      // inSector's gate: |across| ≤ L/2 and |along| ≤ L/4 of the course. That is a RECTANGLE, L wide
+      // and L/2 deep, standing across the leg — not a line, and not a circle. It is drawn as what it
+      // is, because a pilot judges his crossing by what he sees.
+      const ref = next ?? prev;
+      if (ref === null) return null;
+      const course = bearingDeg(tp.wp.lon, tp.wp.lat, ref.lon, ref.lat);
+      const half = s.lengthM / 2, deep = s.lengthM / 4;
+      const across = at(course + 90, 1), along = at(course, 1);
+      const corner = (a: number, l: number): [number, number] =>
+        [across[0] * a + along[0] * l, across[1] * a + along[1] * l];
+      return [corner(-half, -deep), corner(half, -deep), corner(half, deep), corner(-half, deep)];
+    }
+
+    case 'faiQuadrant': {
+      // The axis inSector uses, verbatim: the bisector of the two legs, turned 180° so the quadrant
+      // opens AWAY from the task. Copying the arithmetic would be two rules; this IS the arithmetic.
+      if (prev === null || next === null) return null;
+      const inB = bearingDeg(tp.wp.lon, tp.wp.lat, prev.lon, prev.lat);
+      const outB = bearingDeg(tp.wp.lon, tp.wp.lat, next.lon, next.lat);
+      let bisector = (inB + outB) / 2;
+      if (Math.abs(inB - outB) > 180) bisector += 180;
+      const axis = bisector + 180;
+
+      const out: [number, number][] = [[0, 0]];
+      for (let i = 0; i <= 24; i++) out.push(at(axis - 45 + i * 90 / 24, s.radiusM));
+      return out;
+    }
+  }
+}
+
 // ---- the validation fold ----
 
 export interface TaskProgress {

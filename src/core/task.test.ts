@@ -156,3 +156,81 @@ test('a task with no areas scores exactly its validated wp-to-wp legs', () => {
   expect(scoredDistanceM(t, p, a)).toBeCloseTo(
     distM(A.lon, A.lat, B.lon, B.lat) + distM(B.lon, B.lat, C.lon, C.lat), 6);
 });
+
+// ============ the picture and the rule are ONE description (CAR-005) ============
+// A turnpoint is not a circle. It is a cylinder, or a GATE crossed perpendicular to the course, or a
+// ninety-degree FAI QUADRANT that opens AWAY from the task. A pilot shown a circle where the rules
+// put a quadrant flies to a place that looks valid on his screen and validates nothing — and finds
+// out at the scoring desk.
+//
+// So `sectorOutline` and `inSector` must not be two descriptions kept in step by goodwill. These
+// tests fly a point across the drawn outline and demand that the rule agrees with the picture at
+// every step. If the shape ever drifts from the rule, the build says so.
+
+import { sectorOutline, type TaskPoint } from './task';
+
+/** Metres east/north of a point, back to (lon, lat) — the inverse of what the outline gives. */
+function offset(wp: Waypoint, east: number, north: number): { lon: number; lat: number } {
+  const mPerLat = 111_132;
+  const mPerLon = 111_320 * Math.cos(wp.lat * Math.PI / 180);
+  return { lon: wp.lon + east / mPerLon, lat: wp.lat + north / mPerLat };
+}
+
+const HOME: Waypoint = { name: 'HOME', lon: 6, lat: 45 };
+const NORTH: Waypoint = { name: 'N', lon: 6, lat: 45.4 };
+const EAST: Waypoint = { name: 'E', lon: 6.6, lat: 45 };
+
+test('a CYLINDER: every drawn vertex is inside, and a step beyond each one is out', () => {
+  const tp: TaskPoint = { wp: HOME, sector: { kind: 'cylinder', radiusM: 3000 } };
+  const outline = sectorOutline(tp, NORTH, EAST)!;
+  expect(outline.length).toBeGreaterThan(16);
+
+  for (const [e, n] of outline) {
+    const inside = offset(HOME, e * 0.98, n * 0.98);
+    const outside = offset(HOME, e * 1.05, n * 1.05);
+    expect(inSector(tp, inside.lon, inside.lat, NORTH, EAST)).toBe(true);
+    expect(inSector(tp, outside.lon, outside.lat, NORTH, EAST)).toBe(false);
+  }
+});
+
+test('an FAI QUADRANT is NOT a circle, and the drawing knows which 90° it is', () => {
+  const tp: TaskPoint = { wp: HOME, sector: { kind: 'faiQuadrant', radiusM: 3000 } };
+  const outline = sectorOutline(tp, NORTH, EAST)!;
+
+  // Every drawn point (bar the apex) is in the sector, just inside the radius.
+  for (const [e, n] of outline.slice(1)) {
+    const p = offset(HOME, e * 0.98, n * 0.98);
+    expect(inSector(tp, p.lon, p.lat, NORTH, EAST)).toBe(true);
+  }
+
+  // And the OTHER three quadrants are not: a circle of the same radius would have swallowed them,
+  // and that circle is exactly the lie this test exists to prevent.
+  let outsideTheWedge = 0;
+  for (let brg = 0; brg < 360; brg += 10) {
+    const a = brg * Math.PI / 180;
+    const p = offset(HOME, 2500 * Math.sin(a), 2500 * Math.cos(a));
+    if (!inSector(tp, p.lon, p.lat, NORTH, EAST)) outsideTheWedge++;
+  }
+  expect(outsideTheWedge).toBeGreaterThan(20);      // ~3/4 of the circle is NOT the sector
+});
+
+test('a START LINE is a gate across the course — a rectangle, not a cylinder', () => {
+  const tp: TaskPoint = { wp: HOME, sector: { kind: 'line', lengthM: 2000 } };
+  const outline = sectorOutline(tp, null, NORTH)!;
+  expect(outline.length).toBe(4);
+
+  for (const [e, n] of outline) {
+    const p = offset(HOME, e * 0.95, n * 0.95);
+    expect(inSector(tp, p.lon, p.lat, null, NORTH)).toBe(true);
+  }
+  // Far along the course, well inside a cylinder of the same size, and OUT of the gate.
+  const along = offset(HOME, 0, 900);
+  expect(inSector(tp, along.lon, along.lat, null, NORTH)).toBe(false);
+});
+
+test('a shape that needs a leg it has not got is NOT drawn — a map does not invent a rule', () => {
+  // A start line with nothing to stand across is a misbuilt task. Drawing it as a giant cylinder
+  // would be the map making up a sector the rules never gave it.
+  expect(sectorOutline({ wp: HOME, sector: { kind: 'line', lengthM: 2000 } }, null, null)).toBeNull();
+  expect(sectorOutline({ wp: HOME, sector: { kind: 'faiQuadrant', radiusM: 3000 } }, NORTH, null)).toBeNull();
+});

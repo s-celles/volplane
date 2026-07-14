@@ -539,6 +539,11 @@ function repaintMap(s: NavState, stale: boolean): void {
     // says so, and says how many it was not asked about, so that a bare corner of a zoomed-out
     // map cannot pass for a corner with no fields in it.
     landableScope: altScope,
+    // CAR-005: the task the pilot is FLYING, and which leg he is on. It has been parsed, validated
+    // and ribboned at the top of the screen since Phase 4 — and it was never on the map. `next` is
+    // the point he has yet to reach, and it is what makes one leg bright and the rest dim: a map
+    // that shouts every leg at once says nothing about where he is.
+    task: task ? { task, nextIndex: taskProgress?.next ?? null } : null,
     // SYS-002: the rings age with the link, exactly as the boxes do.
     stale,
     // CFG-003: the two numbers this canvas prints — the judging radius and a named peak — are read
