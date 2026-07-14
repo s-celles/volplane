@@ -43,12 +43,6 @@ export interface GliderPolar {
    *  Flugzeugbau`, under its own legal name. Empty for 66 of the wings, and an empty string is the
    *  honest answer: the commons does not say. */
   manufacturer: string;
-  /** The group this glider is offered under — its FAI class where the data establishes one, and its
-   *  wing class otherwise. NOT a class we inferred: soaring-data leaves `fai_class` empty on purpose,
-   *  because a 15 m span is Standard class without flaps and 15-Metre with them, and the polar files
-   *  record the flaps of ten wings out of 154. So those gliders are offered under `glider`, which is
-   *  true, rather than under a class nobody established. */
-  cls: string;
   plr: string;
   refMassKg: number;
   wingAreaM2: number | null;
@@ -57,11 +51,6 @@ export interface GliderPolar {
    *  the honest answer: 46 of these wings have no span anybody could corroborate. */
   spanM: number | null;
 }
-
-/** The order the groups are offered in. A group the data grows and this list does not name still
- *  appears — at the end — rather than vanishing from the picker: a glider the pilot cannot reach is
- *  worse than one in an unexpected place. */
-const GROUP_ORDER = ['13.5m', '18m', 'open', 'glider', 'paraglider', 'hang_glider', 'microlight'];
 
 const cells = (line: string): string[] => {
   const out: string[] = [];
@@ -142,8 +131,6 @@ export function parseGliderLibrary(csv: string): GliderPolar[] {
     if (seen.has(id)) { let n = 2; while (seen.has(`${id}-${n}`)) n++; id = `${id}-${n}`; }
     seen.add(id);
 
-    const fai = (at(r, 'fai_class') ?? '').trim();
-    const wing = (at(r, 'wing_class') ?? '').trim();
     // The model, and never the file name. A row with no model is a row from a package too old to
     // carry one, and its own name is the only thing left to show — but it is a fallback, not a
     // choice.
@@ -153,7 +140,6 @@ export function parseGliderLibrary(csv: string): GliderPolar[] {
       name,
       model: model !== '' ? model : name,
       manufacturer: (at(r, 'manufacturer') ?? '').replace(/^"|"$/g, '').trim(),
-      cls: fai !== '' ? fai : (wing !== '' ? wing : 'glider'),
       plr,
       refMassKg: mass,
       wingAreaM2: num(at(r, 'wing_area_m2')),
@@ -162,22 +148,6 @@ export function parseGliderLibrary(csv: string): GliderPolar[] {
   }
 
   return out;
-}
-
-/** The groups, in GROUP_ORDER, each holding its gliders in the package's own order. A group the
- *  order does not name goes last rather than disappearing. */
-export function groupLibrary(lib: readonly GliderPolar[]): { cls: string; entries: GliderPolar[] }[] {
-  const groups: { cls: string; entries: GliderPolar[] }[] = [];
-  for (const g of lib) {
-    const found = groups.find(x => x.cls === g.cls);
-    if (found === undefined) groups.push({ cls: g.cls, entries: [g] });
-    else found.entries.push(g);
-  }
-  const rank = (c: string): number => {
-    const i = GROUP_ORDER.indexOf(c);
-    return i < 0 ? GROUP_ORDER.length : i;
-  };
-  return groups.sort((a, b) => rank(a.cls) - rank(b.cls));
 }
 
 /** The gliders grouped by WHO BUILT THEM, which is how a pilot looks for his own.

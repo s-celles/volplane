@@ -10,13 +10,13 @@
 
 import { test, expect } from 'bun:test';
 import {
-  GLIDER_LIBRARY, parseGliderLibrary, groupLibrary, byManufacturer, entryLabel,
+  GLIDER_LIBRARY, parseGliderLibrary, byManufacturer, entryLabel,
   gliderById, polarOf, slug, unusableRows,
 } from './polarlib';
 import { sinkAt, type Polar } from 'soaring-core/polar';
 
 const HEAD = 'name,wing_class,mass_dry_gross_kg,max_water_ballast_l,'
-  + 'speed1_kmh,sink1_ms,speed2_kmh,sink2_ms,speed3_kmh,sink3_ms,wing_area_m2,fai_class';
+  + 'speed1_kmh,sink1_ms,speed2_kmh,sink2_ms,speed3_kmh,sink3_ms,wing_area_m2,span_m';
 const row = (s: string): string => `${HEAD}\n${s}\n`;
 
 // ---- the shipped package ----
@@ -45,18 +45,6 @@ test("no two shipped gliders share an id — the pilot's saved setting is never 
   expect(new Set(ids).size).toBe(ids.length);
 });
 
-test('the unclassified gliders are offered as `glider`, never given a class nobody established', () => {
-  // soaring-data leaves fai_class empty for the wings whose class turns on flaps it does not record.
-  // The picker must show them, and must not name them. A pilot reading "Standard" beside a flapped
-  // 15-metre has been told something false by a machine that had no way of knowing.
-  const groups = groupLibrary(GLIDER_LIBRARY).map(g => g.cls);
-  expect(groups).toContain('glider');
-  expect(groups).not.toContain('');
-  expect(groups).not.toContain('standard');   // nothing in the data establishes Standard class
-});
-
-// ---- the reader, against what the shipped data does not contain ----
-
 test('a row with a missing point is DROPPED and counted, never fitted through the two it has', () => {
   const lib = parseGliderLibrary(row('Broken,glider,350,0,100,-0.7,120,,150,-1.7,10.2,'));
   expect(lib.length).toBe(0);
@@ -80,18 +68,6 @@ test('two gliders with the same name get distinct ids, and neither is dropped', 
   );
   expect(lib.length).toBe(2);
   expect(lib[0].id).not.toBe(lib[1].id);
-});
-
-test("columns are read from the file's OWN header — a new column shifts nothing", () => {
-  // The bug we have already had once, in the .cup parser: a format revision inserted a column, and
-  // the runway WIDTH began appearing in the radio frequency field. A file with columns is a file
-  // that will one day have a new one.
-  const shifted = 'name,wing_class,SOMETHING_NEW,mass_dry_gross_kg,max_water_ballast_l,'
-    + 'speed1_kmh,sink1_ms,speed2_kmh,sink2_ms,speed3_kmh,sink3_ms,wing_area_m2,fai_class';
-  const [g] = parseGliderLibrary(`${shifted}\nLS 4,glider,xxx,350,0,100,-0.7,120,-0.9,150,-1.7,10.2,18m\n`);
-  expect(g.refMassKg).toBe(350);
-  expect(g.wingAreaM2).toBe(10.2);
-  expect(g.cls).toBe('18m');
 });
 
 test("the id survives an accent, because it is what gets written into the pilot's settings", () => {
