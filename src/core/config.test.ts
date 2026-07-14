@@ -10,8 +10,8 @@ import { DEFAULT_POLAR, sinkAt, minSink } from 'soaring-core/polar';
 import {
   DEFAULT_SETTINGS, normalizeSettings, activePolar, fieldNumber, massKgFromField, massBandKg,
 } from './config';
+import { defaultLayout } from './layout';
 import { DEFAULT_UNITS } from './units';
-import { DEFAULT_PAGES } from './infobox';
 import { GLIDER_LIBRARY, gliderById, polarOf } from './polarlib';
 
 // One CSV line in the .plr dialect parsePlr accepts: mass, ballast, then three
@@ -137,8 +137,9 @@ test('a fresh install boots usable, and the whole record survives a JSON round-t
   const s = normalizeSettings({});
   expect(s.lang).toBe('en');
   expect(s.units).toEqual(DEFAULT_UNITS);
-  expect(s.pages).toEqual(DEFAULT_PAGES as unknown as never);
-  expect(s.pages.some(p => p.id === s.activePageId)).toBe(true);
+  expect(s.layout).toEqual(defaultLayout());
+  expect(s.autoPhase).toBe(true);          // the screen follows the flight, unless he says otherwise
+  expect(s.manualPhase).toBe('cruise');
   expect(s.glider).toBeNull();
   // Verbatim: what putJson writes is what the next launch reads back, unchanged.
   expect(JSON.parse(JSON.stringify(s))).toEqual(s);
@@ -154,23 +155,27 @@ test('the units repair is row by row: a mangled speed costs the speed unit alone
   expect(s.units.vario).toBe(DEFAULT_UNITS.vario);
 });
 
-test('a mangled language costs the language alone, never the pages', () => {
-  const mine = [{ id: 'mine', titleId: 'page.cruise', boxIds: ['mc', 'arrival'] }];
-  const s = normalizeSettings({ lang: 'klingon', pages: mine });
+test('a mangled language costs the language alone, never the LAYOUT', () => {
+  const mine = {
+    name: 'mine',
+    phases: {
+      circling: ['mc', 'arrival', 'alt', 'agl'],
+      cruise: ['netto', 'stf', 'alt', 'agl'],
+      finalGlide: ['mc', 'stf', 'alt', 'agl'],
+    },
+  };
+  const s = normalizeSettings({ lang: 'klingon', layout: mine });
   expect(s.lang).toBe('en');
-  expect(s.pages).toEqual(mine as unknown as never);
+  expect(s.layout.phases.circling).toEqual(['mc', 'arrival', 'alt', 'agl']);
   expect(normalizeSettings({ lang: 'fr' }).lang).toBe('fr');
 });
 
-test('an activePageId naming a page the pilot deleted falls back to the first — never to nothing', () => {
-  const s = normalizeSettings({
-    pages: [{ id: 'mine', titleId: 'page.cruise', boxIds: ['alt'] }],
-    activePageId: 'finalGlide',
-  });
-  expect(s.activePageId).toBe('mine');
-  expect(s.pages.some(p => p.id === s.activePageId)).toBe(true);
-  // And an id that does name a surviving page is obeyed.
-  expect(normalizeSettings({ activePageId: 'climb' }).activePageId).toBe('climb');
+test('a manualPhase naming nothing falls back to cruise — never to nothing', () => {
+  // There is no `pages` concept any more, and there never really was one: the three default pages
+  // were called cruise, climb and finalGlide, which ARE the three flight phases. The pilot was
+  // driving by hand the thing the app already knew.
+  expect(normalizeSettings({ manualPhase: 'somewhere' }).manualPhase).toBe('cruise');
+  expect(normalizeSettings({ manualPhase: 'circling' }).manualPhase).toBe('circling');
 });
 
 // ---- which polar flies (CFG-002 vs PLA-010) ----

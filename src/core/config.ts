@@ -12,7 +12,8 @@
 import { parsePlr, DEFAULT_POLAR, type Polar } from 'soaring-core/polar';
 import { LANGS, isLang, type Lang } from './i18n';
 import { DEFAULT_UNITS, QUANTITIES, toSI, type UnitPrefs, type UnitSystem } from './units';
-import { DEFAULT_PAGES, sanitizePages, type Page } from './infobox';
+import { defaultLayout, sanitizeLayout, PHASES, type Layout } from './layout';
+import type { Phase } from './phase';
 import { gliderById, polarOf } from './polarlib';
 
 /** Everything the pilot can configure that must come back at the next launch. */
@@ -39,12 +40,18 @@ export interface Settings {
   /** One unit system PER QUANTITY (CFG-003). Stored whole rather than as a preset name, because
    *  the mixed panel — feet, knots, m/s — is the normal case and no preset can name it. */
   units: UnitPrefs;
-  /** The pilot's InfoBox pages (IHM-001, IHM-002), as ids only. Never the box definitions
-   *  themselves: a persisted definition is a definition that cannot be improved by a release. */
-  pages: Page[];
-  /** Which page he was on. Always the id of one of `pages` — the normalizer guarantees it, so no
-   *  renderer ever has to handle "the active page does not exist". */
-  activePageId: string;
+  /** WHAT STANDS IN THE BOXES, in each of the three flight phases (IHM-001, IHM-002).
+   *
+   *  This replaces `pages`, and the replacement was a DISCOVERY rather than a design: the three
+   *  default pages were called `cruise`, `climb` and `finalGlide`, and the three flight phases are
+   *  circling, cruise and final glide. They were the same three things. The pilot was driving one of
+   *  them by hand — tapping a tab, in a thermal — while the app silently knew the other.
+   *
+   *  Ids only, never the box DEFINITIONS: a persisted definition is a definition that cannot be
+   *  improved by a release. */
+  layout: Layout;
+  /** Which phase row he is looking at when `autoPhase` is off and he picks for himself. */
+  manualPhase: Phase;
   /** Let the SIX BOXES follow the flight — climb, cruise, final glide — instead of making the pilot
    *  tap a tab in a thermal.
    *
@@ -55,7 +62,7 @@ export interface Settings {
    *  that changes its IDENTITY in silence, under your eyes, is worse than a deliberate swipe — you
    *  read the number before you read the label, and the number now means something else. The phase is
    *  written on the screen for exactly this reason, and a pilot who still dislikes it can have his
-   *  three pages back. */
+   *  choice of phase row back — the same three rows, picked by hand. */
   autoPhase: boolean;
   /** The library glider he picked (CFG-002), with the mass he flies it at — that massKg IS the
    *  "adjustable" of "polaires prédéfinies et ajustables". Null massKg means the entry's own
@@ -70,8 +77,8 @@ export const DEFAULT_SETTINGS: Settings = {
   monitoredClasses: null,
   lang: 'en',
   units: DEFAULT_UNITS,
-  pages: DEFAULT_PAGES.map(p => ({ ...p, boxIds: [...p.boxIds] })),
-  activePageId: DEFAULT_PAGES[0]!.id,
+  layout: defaultLayout(),
+  manualPhase: 'cruise',
   autoPhase: true,
   glider: null,
 };
@@ -131,13 +138,6 @@ function repairUnits(v: unknown): UnitPrefs {
   return out;
 }
 
-// The active page must NAME one of the pages that survived. A stored id pointing at a page the
-// pilot deleted — or at a page sanitizePages dropped — would leave the dashboard rendering
-// nothing while the app insists everything is fine, so it falls back to the first page. There is
-// always a first page: sanitizePages never returns an empty list.
-function repairActivePage(v: unknown, pages: Page[]): string {
-  return typeof v === 'string' && pages.some(p => p.id === v) ? v : pages[0]!.id;
-}
 
 // A library id that no longer exists is not a glider, and pretending otherwise would fly the
 // pilot's final glide on somebody else's polar. It normalizes to null, and the default flies —
@@ -168,15 +168,15 @@ function repairGlider(v: unknown): Settings['glider'] {
  *  DEFAULT_SETTINGS itself would let one caller's edit rewrite everyone's default. */
 export function normalizeSettings(raw: unknown): Settings {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
-  const pages = sanitizePages(r.pages);
+
   return {
     cacheBudgetMB: repairBudget(r.cacheBudgetMB),
     polar: repairPolar(r.polar),
     monitoredClasses: repairClasses(r.monitoredClasses),
     lang: repairLang(r.lang),
     units: repairUnits(r.units),
-    pages,
-    activePageId: repairActivePage(r.activePageId, pages),
+    layout: sanitizeLayout(r.layout),
+    manualPhase: PHASES.includes(r.manualPhase as Phase) ? r.manualPhase as Phase : 'cruise',
     // A stored value that is not a boolean is not a preference — it is corruption, and the honest
     // repair is the default, not `false`. A pilot upgrading into this release has never seen the
     // setting and should get the behaviour it exists to give him.

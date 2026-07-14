@@ -28,7 +28,9 @@ import { massBandKg, type Settings } from '../core/config';
 import { QUANTITIES, PRESETS, unitFor, convert, type Quantity, type UnitSystem } from '../core/units';
 import { LANGS, type Lang } from '../core/i18n';
 import { GLIDER_LIBRARY, byManufacturer, entryLabel, type GliderPolar } from '../core/polarlib';
-import { BOXES, BOX_BY_ID, type Page } from '../core/infobox';
+import { BOXES, BOX_BY_ID, type BoxId } from '../core/infobox';
+import { PHASES, MAX_SLOTS, type Layout } from '../core/layout';
+import { PHASE_TITLE, type Phase } from '../core/phase';
 import type { T } from './infobox-ui';
 
 // Glider names and imported file names are the only free text on this screen, and both come from
@@ -239,6 +241,7 @@ export const COMMIT_ON: Record<string, 'change' | 'click'> = {
   'box-up': 'click',
   'box-down': 'click',
   'box-remove': 'click',
+  'layout-export': 'click',
   // A CHECKBOX SPEAKS ON `change`. Left out of this table it would render, be tickable, and do
   // NOTHING — and a control that looks like it works is worse than one that is missing.
   'auto-phase': 'change',
@@ -256,13 +259,13 @@ export function commits(act: string, eventType: string): boolean {
 // carry BOTH the page and the box id, because the same box legitimately lives on several pages —
 // 'vario' is on cruise and on climb — and a handler that knew only the box id would move it on
 // whichever page it found first.
-function boxRowHtml(page: Page, boxId: Page['boxIds'][number], t: T): string {
+function boxRowHtml(phase: Phase, boxId: BoxId, t: T): string {
   // An id the registry no longer knows renders nothing at all: sanitizePages drops those on the way
   // off disk, so reaching here is a bug, and a bug that costs one row is survivable where a row
   // reading 'undefined' beside a remove button is not.
   const def = BOX_BY_ID.get(boxId);
   if (def === undefined) return '';
-  const attrs = `data-page="${esc(page.id)}" data-id="${esc(boxId)}"`;
+  const attrs = `data-page="${esc(phase)}" data-id="${esc(boxId)}"`;
   return `<div class="settings-row settings-box-row">
     <span class="settings-box-label">${esc(t(def.labelId))}</span>
     <button type="button" data-act="box-up" ${attrs}>${esc(t('settings.moveUp'))}</button>
@@ -271,38 +274,54 @@ function boxRowHtml(page: Page, boxId: Page['boxIds'][number], t: T): string {
   </div>`;
 }
 
-function pageHtml(page: Page, active: boolean, t: T): string {
-  const rows = page.boxIds.map(id => boxRowHtml(page, id, t)).join('');
+function rowHtml(l: Layout, phase: Phase, active: boolean, t: T): string {
+  const ids = l.phases[phase];
+  const rows = ids.map(id => boxRowHtml(phase, id, t)).join('');
   // The registry is the only place a box is defined, and this select is the proof: it offers every
-  // BoxDef the app ships that is not already on the page. A box added to core/infobox.ts appears
-  // here without a line changing in this file — and a box that is on no page is never orphaned,
-  // because it is always one tap away from being back.
-  const addable = BOXES.filter(def => !page.boxIds.includes(def.id)).map(def =>
+  // BoxDef the app ships that is not already in the row. A box added to core/infobox.ts appears here
+  // without a line changing in this file — and a box that is in no row is never orphaned, because it
+  // is always one tap away from being back.
+  const addable = BOXES.filter(def => !ids.includes(def.id)).map(def =>
     `<option value="${esc(def.id)}" data-id="${esc(def.id)}">${esc(t(def.labelId))}</option>`,
   ).join('');
-  return `<section class="settings-page${active ? ' active' : ''}" data-page="${esc(page.id)}"${
+  const full = ids.length >= MAX_SLOTS;
+  return `<section class="settings-page${active ? ' active' : ''}" data-page="${esc(phase)}"${
     active ? ' aria-current="true"' : ''}>
-    <h4>${esc(t(page.titleId))}</h4>
+    <h4>${esc(t(PHASE_TITLE[phase]))}</h4>
     <div class="settings-boxes"><span class="settings-boxes-label">${esc(t('settings.pages.boxes'))}</span>${rows}</div>
-    <select data-act="box-add" data-page="${esc(page.id)}">
-      <option value="" selected>${esc(t('settings.add'))}</option>
+    <select data-act="box-add" data-page="${esc(phase)}"${full ? ' disabled' : ''}>
+      <option value="" selected>${esc(full ? t('layout.full', { max: MAX_SLOTS }) : t('settings.add'))}</option>
       ${addable}
     </select>
   </section>`;
 }
 
-/** The pages, in the pilot's order, each with its boxes in the pilot's order (IHM-002).
+/** The three phase rows, each with its boxes in the pilot's order (IHM-002).
  *
  *  The ORDER is the configuration. This file does not sort, does not group and has no opinion about
- *  which box belongs where — it renders the list it was handed, and the active page is marked
- *  because a pilot editing a page needs to know whether it is the one he is looking at in flight.
- *  Exactly one page is ever marked: config.normalizeSettings guarantees activePageId names a page
- *  that exists, so 'no page is active' is not a state this renderer has to have a story for. */
-export function pagesHtml(s: Settings, t: T): string {
-  const pages = s.pages.map(p => pageHtml(p, p.id === s.activePageId, t)).join('');
+ *  which box belongs where — it renders the rows it was handed.
+ *
+ *  AND IT IS REACHABLE IN THE AIR, deliberately. Gliders have two seats: the person editing is often
+ *  not the person flying, and an app that decides when a pilot may touch his own instrument has
+ *  substituted its judgement for his. Workload is a reason to design this well, not to take it away.
+ *
+ *  The file is the other door. `serializeLayout` writes what is on this screen; `parseLayout` reads
+ *  back what a pilot wrote in whatever editor he already uses, and NAMES every refusal — because a
+ *  loader that silently drops a typo is a loader that discards a human's work without telling him. */
+export function layoutHtml(s: Settings, t: T): string {
+  const active = s.autoPhase ? null : s.manualPhase;
+  const rows = PHASES.map(p => rowHtml(s.layout, p, p === active, t)).join('');
   return `<section class="settings-section settings-pages">
     <h3>${esc(t('settings.pages'))}</h3>
-    ${pages}
+    <div class="settings-row">
+      <label class="settings-file">
+        <span>${esc(t('layout.import'))}</span>
+        <input type="file" id="layout-file" accept=".json,application/json" />
+      </label>
+      <button type="button" data-act="layout-export">${esc(t('layout.export'))}</button>
+    </div>
+    <div id="layout-problems" class="note"></div>
+    ${rows}
   </section>`;
 }
 
@@ -338,6 +357,6 @@ export function settingsHtml(s: Settings, t: T): string {
     ${unitsHtml(s, t)}
     ${gliderHtml(s, t)}
     ${phaseHtml(s, t)}
-    ${pagesHtml(s, t)}
+    ${layoutHtml(s, t)}
   </div>`;
 }

@@ -368,4 +368,18 @@ export const EN = {
   'nav.note': 'None of this belongs between a pilot and his map. It is one tap away, and it stays there.',
   'fly.autoPhase': 'follow the flight',
   'fly.autoPhase.title': 'Switch the six boxes automatically between climb, cruise and final glide. Their POSITIONS never move — only what stands in them. Turn it off if you would rather the numbers never changed identity under you.',
+
+  // ---- the layout: a file the pilot owns ----
+  'layout.import': 'load a layout file',
+  'layout.export': 'save this layout to a file',
+  'layout.full': 'full ({max} boxes)',
+  'layout.notJson': 'That file is not JSON, so nothing in it could be read.',
+  'layout.wrongFormat': 'That file does not say it is a VOLPLANE layout. It should begin with "volplane": "{want}" — this one says "{got}".',
+  'layout.noPhases': 'That layout has no `phases` — there is nothing in it to put on the screen.',
+  'layout.phaseMissing': 'No row for {phase}: the default one is used.',
+  'layout.unknownBox': '{phase}: there is no box called `{box}`. It was left out; everything else in that row stands.',
+  'layout.duplicateBox': '{phase}: `{box}` is in the row twice. The second one was left out — the same number twice is a slot wasted.',
+  'layout.tooFew': '{phase}: {have} boxes is fewer than {min}, which is not an instrument. The default row is used.',
+  'layout.tooMany': '{phase}: {have} boxes is more than {max}. The row was cut.',
+  'layout.ragged': 'The rows are not all the same length ({lengths}), so every one was cut to {used}. A row that changes length between phases moves every box below it — and the point of the frame is that a number does not move.',
 } as const satisfies Record<string, string>;

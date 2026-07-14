@@ -41,7 +41,7 @@ import { alternatesHtml, styleFilterHtml } from './landables-ui';
 import { varioTone, stfTone } from '../core/vartone';
 import { chooseVoice } from '../core/alarmtone';
 import { circlingTracker } from '../core/circling';
-import { nextPhase, PHASE_BOXES, PHASE_TITLE, type Phase } from '../core/phase';
+import { nextPhase, type Phase } from '../core/phase';
 import { recogniser, type Gesture } from '../core/gesture';
 import { heroHtml, glideBarHtml } from './flyframe-ui';
 import { circleRose } from '../core/circleassist';
@@ -50,9 +50,10 @@ import {
 } from '../core/terrainalarm';
 import { alertsHtml, trafficPanelHtml } from './alerts-ui';
 import { translator } from '../core/i18n';
-import { boxHtml, boxesHtml, pageTabsHtml } from './infobox-ui';
+import { boxHtml, boxesHtml, phaseTabsHtml } from './infobox-ui';
 import { settingsHtml, commits } from './settings-ui';
-import { editPages, type BoxSource, type PageEdit } from '../core/infobox';
+import { type BoxId, type BoxSource } from '../core/infobox';
+import { editLayout, parseLayout, serializeLayout, PHASES, type LayoutEdit, type LayoutProblem } from '../core/layout';
 import { GLIDER_LIBRARY } from '../core/polarlib';
 import { PRESETS, formatText, type Quantity, type UnitSystem } from '../core/units';
 import { isLang } from '../core/i18n';
@@ -752,15 +753,17 @@ function render(s: NavState, link: LinkState): void {
   // instrument by knowing where a number lives; a layout that reflows under him has taken away the
   // only thing that made it glanceable.
   phase = nextPhase(phase, { circling: circles.circling(), arrivalM: arr?.height ?? null });
-  const page = settings.autoPhase
-    ? { id: phase, titleId: PHASE_TITLE[phase], boxIds: [...PHASE_BOXES[phase]] }
-    : (settings.pages.find(p => p.id === settings.activePageId) ?? settings.pages[0]!);
+  // Which ROW he is looking at. The machine picks it, or he does — but they are the SAME three rows,
+  // out of the same layout. There was never a `pages` concept in this app: there was a phase concept,
+  // being operated by hand.
+  const shown: Phase = settings.autoPhase ? phase : settings.manualPhase;
+  const boxIds = settings.layout.phases[shown];
 
   heroEl.innerHTML = heroHtml({
     goalName: goal === null ? null : t('hero.goal'),
     distM: goal && s.fix ? distM(s.fix.lon, s.fix.lat, goal.lon, goal.lat) : null,
     arrivalM: arr?.height ?? null,
-    phase,
+    phase: shown,
     stale,
   }, settings.units, t);
   glidebarEl.innerHTML = glideBarHtml(arr?.height ?? null, t);
@@ -787,8 +790,8 @@ function render(s: NavState, link: LinkState): void {
   // the setting: he has said he would rather choose, so he must be given something to choose with. A
   // tab strip that stayed on screen while the phase drove the boxes would be a control that does
   // nothing — the worst kind, because it looks like it does something.
-  flyView.innerHTML = (settings.autoPhase ? '' : pageTabsHtml(settings.pages, settings.activePageId, t))
-    + boxesHtml(page, src, settings.units, t, { stale });
+  flyView.innerHTML = (settings.autoPhase ? '' : phaseTabsHtml(shown, t))
+    + boxesHtml(boxIds, src, settings.units, t, { stale });
 
   // ---- and everything that LEFT ----
   //
@@ -919,11 +922,11 @@ flyView.onclick = e => {
   const el = e.target as HTMLElement;
   // IHM-002: the page tabs repaint at 1 Hz under this listener, exactly as the alert rows do —
   // which is precisely why the listener is on the container and not on the buttons. The chosen
-  // page is a SETTING (CFG-005): it goes through the normalizer and onto the disk, so the pilot
-  // who was on 'final glide' when the battery died comes back to 'final glide'.
-  const tab = el.closest('button[data-page]') as HTMLButtonElement | null;
-  if (tab?.dataset.page) {
-    applySettings({ activePageId: tab.dataset.page });
+  // The phase row he picked is a SETTING (CFG-005): it goes through the normalizer and onto the disk,
+  // so the pilot who was on 'final glide' when the battery died comes back to 'final glide'.
+  const tab = el.closest('button[data-phase]') as HTMLButtonElement | null;
+  if (tab?.dataset.phase && PHASES.includes(tab.dataset.phase as Phase)) {
+    applySettings({ manualPhase: tab.dataset.phase as Phase });
     return;
   }
   const btn = el.closest('button[data-ack]') as HTMLButtonElement | null;
@@ -2243,15 +2246,65 @@ function renderAnalysis(): void {
 /** ONLY the panel. The setup form and the connect form live in #settings too, and they are STATIC:
  *  their listeners were bound once, at start-up, and a repaint that replaced them would leave a
  *  screen full of dead controls — the exact bug the review found in the settings panel itself. */
+/** WHAT THE LAST LAYOUT FILE WAS REFUSED FOR, and why this is a variable and not a local.
+ *
+ *  The first version wrote the refusals into the panel and then called applySettings — which calls
+ *  renderSettings, which REBUILDS THE PANEL. The notes were wiped in the same tick they were written.
+ *
+ *  So the app silently swallowed the typo after all: the pilot loaded his file, five boxes appeared
+ *  where he had written six, and nothing on the screen said why. That is precisely the failure this
+ *  whole format exists to refuse, reintroduced by the shell in the last three lines of the feature.
+ *
+ *  The refusals outlive the render because they are ABOUT the render. */
+let layoutProblems: LayoutProblem[] = [];
+
 function renderSettings(): void {
   panelEl.innerHTML = settingsHtml(settings, t);
+  const noteEl0 = panelEl.querySelector<HTMLElement>('#layout-problems');
+  if (noteEl0 !== null) {
+    noteEl0.innerHTML = layoutProblems.map(p => `<div class="bad">${t(p.id, p.params)}</div>`).join('');
+  }
+
+  // ---- THE SECOND DOOR ----
+  //
+  // The panel above is one way to edit a layout. The FILE is the other, and it is the one that buys
+  // what an editor cannot: a layout you can read, diff, keep in version control, hand to a club-mate,
+  // or open in whatever you already use. One format, two doors.
+  const fileEl = panelEl.querySelector<HTMLInputElement>('#layout-file');
+  if (fileEl === null) return;
+
+  fileEl.onchange = async e => {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (f === undefined) return;
+    const { layout, problems } = parseLayout(await f.text());
+
+    // EVERY REFUSAL IS SHOWN — and it must survive applySettings, which rebuilds this panel. The other
+    // loader in this app silently drops what it cannot read, and for the app's own store that is
+    // right: it is our cache. This is a file a HUMAN typed, and a program that discards your work
+    // without telling you is broken, however tidily it does it.
+    layoutProblems = problems;
+    if (layout === null) { renderSettings(); return; }   // nothing usable survived: his file is still his
+    applySettings({ layout });                            // …which renders the panel, notes and all
+    render(state, link);
+  };
 }
 
-/** Move a box within a page, or take it off. The REDUCER is core's (infobox.editPages) — pure,
- *  tested, and the keeper of the one rule that cost a page: a page never loses its last box. This
- *  shell function is what is left of the old one, which is the writing of the result down. */
-function editPage(pageId: string, act: PageEdit, boxId: string): void {
-  applySettings({ pages: editPages(settings.pages, pageId, act, boxId) });
+/** Move a box within a phase's row, or take it off. The REDUCER is core's (layout.editLayout) —
+ *  pure, tested, and the keeper of the two rules a row must never break: it never falls below
+ *  MIN_SLOTS and never grows past MAX_SLOTS. A row that can be emptied is a row a pilot WILL empty,
+ *  on the ground, on a Tuesday — and find out in a thermal.
+ *
+ *  NOTHING HERE IS GATED ON BEING AIRBORNE. Gliders have two seats: the person editing is often not
+ *  the person flying, an instructor reconfigures the front pilot's screen as a matter of course, and
+ *  an app that decides when a pilot may touch his own instrument has substituted its judgement for
+ *  his. */
+const ACT: Record<string, LayoutEdit> = {
+  'box-add': 'add', 'box-remove': 'remove', 'box-up': 'up', 'box-down': 'down',
+};
+function editRow(phase: string, act: string, boxId: string): void {
+  const edit = ACT[act];
+  if (edit === undefined || !PHASES.includes(phase as Phase)) return;
+  applySettings({ layout: editLayout(settings.layout, phase as Phase, edit, boxId as BoxId) });
 }
 
 /** One handler for every control on the panel. `change` and `click` both land here because a
@@ -2329,12 +2382,27 @@ function onSettingsEvent(e: Event): void {
       break;
     }
     case 'box-add':
-      if (value !== '') editPage(page, act, value);
+      if (value !== '') editRow(page, act, value);
       break;
     case 'box-up':
     case 'box-down':
     case 'box-remove':
-      editPage(page, act, id);
+      editRow(page, act, id);
+      break;
+    case 'layout-export': {
+      // The pilot's own file, named after his own layout. It leaves through the browser rather than
+      // through Tauri, because a download is a download and this app is one on the desk too.
+      const blob = new Blob([serializeLayout(settings.layout)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${settings.layout.name.replace(/[^\w.-]+/g, '-')}.volplane.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      break;
+    }
+    case 'phase-pick':
+      // He turned the automatic switching off, so he picks the row. Same three rows.
+      if (PHASES.includes(id as Phase)) applySettings({ manualPhase: id as Phase });
       break;
   }
 }

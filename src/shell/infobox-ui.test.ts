@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { boxesHtml, boxHtml, pageTabsHtml } from './infobox-ui';
-import { BOXES, DEFAULT_PAGES, type BoxId, type BoxSource, type Page } from '../core/infobox';
+import { boxesHtml, boxHtml, phaseTabsHtml } from './infobox-ui';
+import { BOXES, type BoxId, type BoxSource } from '../core/infobox';
+import { defaultLayout, PHASES } from '../core/layout';
 import { PRESETS } from '../core/units';
 import { translator } from '../core/i18n';
 
@@ -16,9 +17,9 @@ const NOTHING: BoxSource = {
   arrivalM: null, mcMs: null,
 };
 
-const page = (id: string, boxIds: BoxId[]): Page => ({ id, titleId: 'page.cruise', boxIds });
+const page = (_id: string, boxIds: BoxId[]): BoxId[] => boxIds;
 
-const ALL: Page = page('all', BOXES.map(b => b.id));
+const ALL: BoxId[] = BOXES.map(b => b.id);
 
 /** The count of a substring, because "appears" and "appears exactly twice" are different claims. */
 const count = (h: string, needle: string): number => h.split(needle).length - 1;
@@ -80,24 +81,27 @@ describe('IHM-006 — every word through the catalogue', () => {
     expect(html).not.toContain('AGL');
     expect(html).not.toContain('ground speed');
 
-    expect(pageTabsHtml(DEFAULT_PAGES, 'cruise', fr)).toContain('transition');
+    expect(phaseTabsHtml('cruise', fr)).toContain('TRANSITION');
   });
 });
 
-describe('IHM-002 — the pages the pilot flips between', () => {
-  test('exactly one tab is active and each carries its own data-page', () => {
-    const html = pageTabsHtml(DEFAULT_PAGES, 'climb', en);
-
+describe('IHM-002 — the three phase rows', () => {
+  test('exactly one tab is active, and each carries its own phase', () => {
+    // There was never a `pages` concept. The three default pages were called cruise, climb and
+    // finalGlide — which ARE the three flight phases. The pilot was driving by hand the thing the app
+    // already knew, and these tabs appear ONLY when he has turned the automatic switching off.
+    const html = phaseTabsHtml('circling', en);
     expect(count(html, 'class="page-tab active"')).toBe(1);
-    expect(html).toContain('class="page-tab active" type="button" data-page="climb"');
-    for (const p of DEFAULT_PAGES) expect(html).toContain(`data-page="${p.id}"`);
-    expect(count(html, '<button')).toBe(DEFAULT_PAGES.length);
+    expect(html).toContain('data-phase="circling"');
+    for (const p of PHASES) expect(html).toContain(`data-phase="${p}"`);
+    expect(count(html, '<button')).toBe(PHASES.length);
   });
 
-  test('an active id that matches no page leaves every tab inactive rather than guessing one', () => {
-    expect(pageTabsHtml(DEFAULT_PAGES, 'nope', en)).not.toContain('active');
+  test('the rows are the layout\'s rows, and there are three of them', () => {
+    expect(Object.keys(defaultLayout().phases).sort()).toEqual([...PHASES].sort());
   });
 });
+
 
 describe('IHM-001 — the boxes are the pilot´s, in the pilot´s order', () => {
   test('the order of the ids is the order on screen', () => {
@@ -108,8 +112,8 @@ describe('IHM-001 — the boxes are the pilot´s, in the pilot´s order', () => 
     expect(flipped.indexOf('vario')).toBeLessThan(flipped.indexOf('AGL'));
   });
 
-  test('an id that no longer resolves costs its box, never the page', () => {
-    const rotten = { id: 'x', titleId: 'page.cruise', boxIds: ['alt', 'ghost', 'vario'] } as unknown as Page;
+  test('an id that no longer resolves costs its box, never the ROW', () => {
+    const rotten = ['alt', 'ghost', 'vario'] as unknown as BoxId[];
     const html = boxesHtml(rotten, { ...NOTHING, altM: 1000, varioMs: 1 }, PRESETS.metric, en);
 
     expect(count(html, '<div class="box"')).toBe(2);

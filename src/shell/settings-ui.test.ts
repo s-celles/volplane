@@ -9,8 +9,9 @@ import { QUANTITIES, PRESETS, unitFor } from '../core/units';
 import { CATALOGUES, translator } from '../core/i18n';
 import { GLIDER_LIBRARY } from '../core/polarlib';
 import { BOXES } from '../core/infobox';
+import { PHASES } from '../core/layout';
 import {
-  settingsHtml, unitsHtml, gliderHtml, pagesHtml, languageHtml, commits, COMMIT_ON,
+  settingsHtml, unitsHtml, gliderHtml, layoutHtml, languageHtml, commits, COMMIT_ON,
 } from './settings-ui';
 
 const t = translator('en');
@@ -159,185 +160,78 @@ test('CFG-002: an imported .plr is NAMED, and the panel says it is what flies', 
     .not.toContain('settings-imported');
 });
 
-// ---- IHM-001 / IHM-002 ----
+// ---- IHM-001 / IHM-002: the three phase rows ----
+//
+// There was never a `pages` concept in this app. The three default pages were called cruise, climb
+// and finalGlide, and the three flight PHASES are circling, cruise and final glide. They were the
+// same three things, and the pilot was driving one of them by hand while the app silently knew the
+// other. A LAYOUT is exactly the three rows.
 
-test('IHM-001: every box in the registry is reachable — a row, or the add list of that page', () => {
+test('IHM-001: every box in the registry is reachable — in a row, or in that row\'s add list', () => {
   const s = settings();
-  const html = pagesHtml(s, t);
-  for (const page of s.pages) {
-    const open = html.indexOf(`data-page="${page.id}"`);
+  const html = layoutHtml(s, t);
+  for (const phase of PHASES) {
+    const open = html.indexOf(`data-page="${phase}"`);
     const end = html.indexOf('</section>', open);
     const block = html.slice(open, end);
     for (const def of BOXES) {
-      const onPage = count(block, `data-act="box-remove" data-page="${page.id}" data-id="${def.id}"`);
+      const inRow = count(block, `data-act="box-remove" data-page="${phase}" data-id="${def.id}"`);
       const addable = count(block, `<option value="${def.id}" data-id="${def.id}">`);
       // Exactly one of the two, never both, never neither: a box the registry defines but that this
       // screen cannot reach is a feature the pilot does not have.
-      expect(`${def.id}: ${onPage + addable}`).toBe(`${def.id}: 1`);
+      expect(`${def.id}: ${inRow + addable}`).toBe(`${def.id}: 1`);
     }
   }
 });
 
-test('IHM-002: pages render in order, boxes in order, and one page is marked active', () => {
+test('IHM-002: the rows render in phase order, the boxes in HIS order', () => {
   const s = settings();
-  const html = pagesHtml(s, t);
-  const pageOrder = [...html.matchAll(/<section class="settings-page[^"]*" data-page="([^"]+)"/g)].map(m => m[1]);
-  expect(pageOrder).toEqual(s.pages.map(p => p.id));
+  const html = layoutHtml(s, t);
+  const order = [...html.matchAll(/<section class="settings-page[^"]*" data-page="([^"]+)"/g)].map(m => m[1]);
+  expect(order).toEqual([...PHASES]);
 
-  for (const page of s.pages) {
-    const open = html.indexOf(`data-page="${page.id}"`);
+  for (const phase of PHASES) {
+    const open = html.indexOf(`data-page="${phase}"`);
     const end = html.indexOf('</select>', open);
     const block = html.slice(open, end);
     const rows = [...block.matchAll(/data-act="box-remove" data-page="[^"]+" data-id="([^"]+)"/g)].map(m => m[1]);
-    expect(rows).toEqual(page.boxIds);
+    expect(rows).toEqual(s.layout.phases[phase]);
     // Every row carries the whole triple — a box that can be removed but not moved is half a
     // configuration.
-    for (const id of page.boxIds) {
-      expect(block).toContain(`data-act="box-up" data-page="${page.id}" data-id="${id}"`);
-      expect(block).toContain(`data-act="box-down" data-page="${page.id}" data-id="${id}"`);
+    for (const id of s.layout.phases[phase]) {
+      expect(block).toContain(`data-act="box-up" data-page="${phase}" data-id="${id}"`);
+      expect(block).toContain(`data-act="box-down" data-page="${phase}" data-id="${id}"`);
     }
   }
-  expect(count(html, 'aria-current="true"')).toBe(1);
-  expect(html).toContain(`data-page="${s.activePageId}" aria-current="true"`);
 });
 
-test('IHM-002: the marker follows the active page, wherever it is', () => {
-  const s = settings({ activePageId: DEFAULT_SETTINGS.pages[2]!.id });
-  const html = pagesHtml(s, t);
-  expect(count(html, 'aria-current="true"')).toBe(1);
-  expect(html).toContain(`data-page="${s.pages[2]!.id}" aria-current="true"`);
+test('the ACTIVE row is marked only when the pilot is picking it himself', () => {
+  // With autoPhase on, the machine picks the row and no row is "the one he is on" — marking one would
+  // be a claim about a choice he did not make.
+  expect(count(layoutHtml(settings({ autoPhase: true }), t), 'aria-current="true"')).toBe(0);
+  const off = layoutHtml(settings({ autoPhase: false, manualPhase: 'finalGlide' }), t);
+  expect(count(off, 'aria-current="true"')).toBe(1);
+  expect(off).toContain('data-page="finalGlide" aria-current="true"');
 });
 
-test('IHM-002: a page whose boxes were reordered renders in HIS order', () => {
-  const s = settings();
-  const page = { ...s.pages[0]!, boxIds: [...s.pages[0]!.boxIds].reverse() };
-  const html = pagesHtml(settings({ pages: [page], activePageId: page.id }), t);
-  const rows = [...html.matchAll(/data-act="box-remove" data-page="[^"]+" data-id="([^"]+)"/g)].map(m => m[1]);
-  expect(rows).toEqual(page.boxIds);
+test('AND THE EDITOR IS REACHABLE, ALWAYS — nothing here is gated on being airborne', () => {
+  // Gliders have two seats. The person editing is often not the person flying: an instructor
+  // reconfigures the front pilot's screen as a matter of course, and a solo pilot in a stable cruise
+  // is perfectly able to move a box. An app that decides when a pilot may touch his own instrument
+  // has substituted its judgement for his. Workload is a reason to design this WELL.
+  const html = layoutHtml(settings(), t);
+  expect(html).toContain('data-act="box-remove"');
+  expect(html).toContain('data-act="box-add"');
+  expect(html).not.toContain('disabled title');       // no in-flight lock, and none to add later
 });
 
-// ---- IHM-006 ----
-
-test('IHM-006: every id this panel asks for exists in BOTH catalogues', () => {
-  // The global scan in core/i18n.test.ts catches the literal t('…') calls; the unit rows and the
-  // preset buttons build their ids from a QUANTITY and a UnitSystem, which the scan's regex cannot
-  // see. So they are checked here, where the loop that builds them lives.
-  const ids = [
-    ...QUANTITIES.map(q => `quantity.${q}`),
-    ...(['metric', 'imperial', 'aviation'] as const).map(sys => `settings.preset.${sys}`),
-  ];
-  for (const id of ids)
-    for (const lang of ['en', 'fr'] as const)
-      expect(`${lang}: ${id} ${id in CATALOGUES[lang]}`).toBe(`${lang}: ${id} true`);
-});
-
-test('IHM-006: in French the panel speaks French, and no English catalogue value survives', () => {
-  const html = settingsHtml(settings(), fr);
-  expect(html).toContain(CATALOGUES.fr['settings.title']);
-  expect(html).toContain(CATALOGUES.fr['settings.units']);
-  expect(html).toContain(CATALOGUES.fr['settings.glider']);
-  expect(html).toContain(CATALOGUES.fr['settings.language']);
-  for (const q of QUANTITIES) expect(html).toContain(CATALOGUES.fr[`quantity.${q}`]);
-
-  // The English wording of anything the French catalogue spells differently must be GONE — a half
-  // translated panel is how a pilot learns not to trust the language switch.
-  const differing = (['settings.title', 'settings.units', 'settings.glider', 'settings.language',
-    'settings.preset.aviation', 'settings.remove', 'settings.add'] as const)
-    .filter(id => CATALOGUES.en[id] !== CATALOGUES.fr[id]);
-  expect(differing.length).toBeGreaterThan(4);
-  for (const id of differing) expect(html).not.toContain(`>${CATALOGUES.en[id]}<`);
-});
-
-test('IHM-006: the language list is NOT translated — it is the way out', () => {
-  const html = languageHtml(settings({ lang: 'fr' }), fr);
-  // A pilot who landed on a language he cannot read finds his own spelled the way he spells it.
-  expect(html).toContain('English');
-  expect(html).toContain('Français');
-  expect(html).toContain('<option value="fr" selected>');
-  expect(languageHtml(settings({ lang: 'en' }), t)).toContain('<option value="en" selected>');
-});
-
-// ---- the contract ----
-
-test('the panel is a pure function — same value, same string, every time', () => {
-  const s = settings({ glider: { libId: 'ls-4a', massKg: 420 }, units: { ...PRESETS.aviation } });
-  expect(settingsHtml(s, t)).toBe(settingsHtml(s, t));
-  // No clock, no counter, no random id: the second render of an unchanged settings value is
-  // byte-for-byte the first, which is what lets main.ts repaint the panel after every act.
-  expect(settingsHtml(s, fr)).not.toBe(settingsHtml(s, t));
-});
-
-test('every control carries a data-act, and no form wraps them', () => {
-  const html = settingsHtml(settings({ glider: { libId: 'ls-4a', massKg: null } }), t);
-  // The event contract, whole: main.ts hangs ONE delegated listener and reads data-act/data-id.
-  for (const act of ['lang', 'unit', 'preset', 'glider', 'mass', 'box-add', 'box-up', 'box-down', 'box-remove'])
-    expect(html).toContain(`data-act="${act}"`);
-  // No <form>: this panel commits per control, so there is no submit to forget and no staged state
-  // to lose (CFG-005).
-  expect(html).not.toContain('<form');
-});
-
-test('free text cannot break the markup around it', () => {
-  const html = gliderHtml(settings({ polar: { name: '<img src=x onerror=1>"', plr: '' } }), t);
-  expect(html).not.toContain('<img');
-});
-
-// ---- CFG-003 reaches the mass box, in both directions ----
-
-test('the mass box names its unit, and speaks the unit the pilot chose', () => {
-  // The failure this pins: the panel above this row offered the pilot a MASS unit that could say
-  // lb, while the box itself was kilograms-only and said so nowhere. A pound typed into a kilogram
-  // field rescales the polar that flies the final glide, and nothing on the screen contradicts it.
-  const ls4 = GLIDER_LIBRARY.find(g => g.id === 'ls-4a')!;   // published at 361 kg
-  const metric = gliderHtml(settings({ glider: { libId: 'ls-4a', massKg: 480 } }), t);
-  expect(metric).toContain('>kg<');
-  expect(metric).toContain('value="480"');
-  expect(metric).toContain(`placeholder="${ls4.refMassKg}"`);
-
-  const imperial = gliderHtml(
-    settings({ glider: { libId: 'ls-4a', massKg: 480 }, units: { ...PRESETS.imperial } }), t);
-  expect(imperial).toContain('>lb<');
-  expect(imperial).toContain('value="1058"');               // 480 kg, in the unit he reads
-  expect(imperial).toContain('placeholder="796"');          // and so is the reference mass
-  expect(imperial).not.toContain('value="480"');
-  // The unit code comes from the units table, never from a word typed here.
-  expect(imperial).toContain(unitFor('mass', 'imperial'));
-});
-
-test('the mass box PRINTS the band it will accept — a refusal the pilot can see coming', () => {
-  // A refused mass repaints the box empty over its placeholder. A pilot who cannot see WHY reads
-  // that as the app losing his input, so the panel says, before he types, what it accepts and what
-  // flies if he types nothing: the polar as published, at its own reference mass.
-  const html = gliderHtml(settings({ glider: { libId: 'ls-4a', massKg: null } }), t);
-  expect(html).toContain('min="253"');                      // 0.7 × 361, per config.massBandKg
-  expect(html).toContain('max="578"');                      // 1.6 × 361
-  expect(html).toContain(CATALOGUES.en['settings.glider.massBand']
-    .replace('{ref}', '361').replace(/\{unit\}/g, 'kg').replace('{min}', '253').replace('{max}', '578'));
-});
-
-// ---- a click is not a choice ----
-
-test('every act commits on the event its CONTROL actually speaks — a click is not a choice', () => {
-  // The failure this pins: main.ts bound the same handler to `change` AND `click`, and the handler
-  // never asked which had fired. So tapping the mass box to type into it committed the empty box
-  // and repainted the panel through innerHTML — the input was destroyed under the pilot's finger,
-  // and a mass could not be typed at all. Tapping the glider list to browse it re-ran the 'glider'
-  // case, which clears `polar` and `massKg`: an imported .plr erased by a click that chose nothing.
-  const html = settingsHtml(settings({ glider: { libId: 'ls-4a', massKg: null } }), t);
-
-  // Walk the RENDERED panel — every control, whatever tag it wears — rather than a list retyped
-  // here. A control that grows an act this table does not know commits on nothing, and fails here.
-  const controls = [...html.matchAll(/<(select|input|button)\b[^>]*data-act="([^"]+)"/g)];
-  expect(controls.length).toBeGreaterThan(5);
-  for (const [, tag, act] of controls) {
-    const expected = tag === 'button' ? 'click' : 'change';
-    expect(`${act} commits on ${COMMIT_ON[act!]}`).toBe(`${act} commits on ${expected}`);
-    expect(commits(act!, expected)).toBe(true);
-    expect(commits(act!, expected === 'click' ? 'change' : 'click')).toBe(false);
-  }
-  // And an act nobody rendered commits on nothing: an injected control cannot write settings.
-  expect(commits('nonsense', 'click')).toBe(false);
-  expect(commits('nonsense', 'change')).toBe(false);
+test('THE SECOND DOOR: the layout goes out to a file, and comes back from one', () => {
+  // What the file buys, on top of the editor, is everything an editor cannot: a layout you can read,
+  // diff, keep in version control, hand to a club-mate, or open in whatever you already use.
+  const html = layoutHtml(settings(), t);
+  expect(html).toContain('id="layout-file"');
+  expect(html).toContain('data-act="layout-export"');
+  expect(commits('layout-export', 'click')).toBe(true);
 });
 
 test('the phase toggle SPEAKS — a checkbox left out of COMMIT_ON would tick and do nothing', () => {

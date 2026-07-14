@@ -347,4 +347,18 @@ export const FR: Record<MsgId, string> = {
   'nav.note': 'Rien de tout ceci n’a sa place entre un pilote et sa carte. C’est à un toucher, et ça y reste.',
   'fly.autoPhase': 'suivre le vol',
   'fly.autoPhase.title': 'Bascule les six cases automatiquement entre spirale, transition et arrivée. Leur POSITION ne bouge jamais — seul leur contenu change. À couper si vous préférez qu’un nombre ne change jamais d’identité sous vos yeux.',
+
+  // ---- the layout: a file the pilot owns ----
+  'layout.import': 'charger un fichier de disposition',
+  'layout.export': 'enregistrer cette disposition dans un fichier',
+  'layout.full': 'complet ({max} cases)',
+  'layout.notJson': 'Ce fichier n’est pas du JSON : rien n’a pu être lu.',
+  'layout.wrongFormat': 'Ce fichier ne dit pas être une disposition VOLPLANE. Il devrait commencer par "volplane" : "{want}" — celui-ci dit "{got}".',
+  'layout.noPhases': 'Cette disposition n’a pas de `phases` : il n’y a rien à mettre à l’écran.',
+  'layout.phaseMissing': 'Pas de rangée pour {phase} : celle par défaut est utilisée.',
+  'layout.unknownBox': '{phase} : aucune case ne s’appelle `{box}`. Elle a été écartée ; tout le reste de la rangée tient.',
+  'layout.duplicateBox': '{phase} : `{box}` figure deux fois. La seconde a été écartée — deux fois le même nombre, c’est une place perdue.',
+  'layout.tooFew': '{phase} : {have} cases, c’est moins que {min} et ce n’est plus un instrument. La rangée par défaut est utilisée.',
+  'layout.tooMany': '{phase} : {have} cases, c’est plus que {max}. La rangée a été coupée.',
+  'layout.ragged': 'Les rangées n’ont pas toutes la même longueur ({lengths}) : toutes ont été coupées à {used}. Une rangée qui change de longueur entre deux phases déplace toutes les cases en dessous — et le principe du cadre, c’est qu’un nombre ne bouge pas.',
 };

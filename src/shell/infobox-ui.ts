@@ -15,7 +15,9 @@
 // And a null is UNKNOWN all the way to the pixel (POT-007): a dash, the `unknown` class, and NO
 // unit. "— ft" still claims a foot was involved in a measurement nobody made.
 
-import { BOX_BY_ID, type BoxDef, type BoxSource, type Page } from '../core/infobox';
+import { BOX_BY_ID, type BoxDef, type BoxId, type BoxSource } from '../core/infobox';
+import { PHASES } from '../core/layout';
+import { PHASE_TITLE, type Phase } from '../core/phase';
 import { format, type Quantity, type UnitPrefs } from '../core/units';
 
 /** The translator, handed in. The renderer must never CHOOSE a language — detection is the shell's
@@ -84,13 +86,13 @@ function badgeHtml(def: BoxDef, t: T): string {
  *  `stale` (SYS-002) only reaches the container: the values age VISIBLY, they do not vanish. A
  *  screen that blanks under a pilot mid-turn has taken away the last thing he had. */
 export function boxesHtml(
-  page: Page,
+  boxIds: readonly BoxId[],
   s: BoxSource,
   units: UnitPrefs,
   t: T,
   opts?: { stale?: boolean },
 ): string {
-  const boxes = page.boxIds
+  const boxes = boxIds
     .map(id => BOX_BY_ID.get(id))
     .filter((def): def is BoxDef => def !== undefined)
     .map(def => boxHtml(t(def.labelId), def.get(s), def.quantity, units, {
@@ -107,10 +109,14 @@ export function boxesHtml(
  *  `data-page` rather than a bound handler, because main.ts delegates the click on a container it
  *  builds once and this nav repaints under it — a listener attached to a button that the next
  *  render replaces is a tab that stops working after the first fix. */
-export function pageTabsHtml(pages: readonly Page[], activeId: string, t: T): string {
-  const tabs = pages.map(p =>
-    `<button class="page-tab${p.id === activeId ? ' active' : ''}" type="button" `
-    + `data-page="${esc(p.id)}">${esc(t(p.titleId))}</button>`,
+/** The three phase rows, as tabs — shown ONLY when the pilot has turned the automatic switching off.
+ *
+ *  They are the same three rows the phase would have chosen for him. There was never a `pages`
+ *  concept in this app: there was a phase concept, being operated by hand. */
+export function phaseTabsHtml(active: Phase, t: T): string {
+  const tabs = PHASES.map(p =>
+    `<button class="page-tab${p === active ? ' active' : ''}" type="button" `
+    + `data-phase="${esc(p)}">${esc(t(PHASE_TITLE[p]))}</button>`,
   ).join('');
   return `<nav class="page-tabs">${tabs}</nav>`;
 }
