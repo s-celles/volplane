@@ -85,7 +85,7 @@ test('CFG-003: the presets fill every row at once, and each is one act', () => {
 
 test('CFG-002: every library glider appears exactly once, grouped by WHO BUILT IT', () => {
   // It used to group by FAI class, which put 106 wings in a single list called `glider`. A pilot
-  // hunting for his ASW 20 in a scrolling native <select>, in flight, with gloves, was expected to
+  // hunting for his ASW 20 in a scrolling native <select>, in flight, one-handed, was expected to
   // find it there. He does not think "Standard class". He thinks "Schleicher".
   const html = gliderHtml(settings(), t);
   for (const g of GLIDER_LIBRARY) expect(count(html, `data-id="${g.id}"`)).toBe(1);
@@ -338,4 +338,19 @@ test('every act commits on the event its CONTROL actually speaks — a click is 
   // And an act nobody rendered commits on nothing: an injected control cannot write settings.
   expect(commits('nonsense', 'click')).toBe(false);
   expect(commits('nonsense', 'change')).toBe(false);
+});
+
+test('the phase toggle SPEAKS — a checkbox left out of COMMIT_ON would tick and do nothing', () => {
+  // Unknown acts commit on nothing, which is the right default and the reason this table exists.
+  // It is also how a control ends up rendering, being tickable, and silently writing no setting —
+  // and a control that looks like it works is worse than one that is missing.
+  expect(commits('auto-phase', 'change')).toBe(true);
+  expect(commits('auto-phase', 'click')).toBe(false);
+});
+
+test('the pilot can take the phase away from the machine', () => {
+  const on = settingsHtml({ ...DEFAULT_SETTINGS, autoPhase: true }, t);
+  const off = settingsHtml({ ...DEFAULT_SETTINGS, autoPhase: false }, t);
+  expect(on).toContain('data-act="auto-phase" checked');
+  expect(off).toContain('data-act="auto-phase" />');
 });

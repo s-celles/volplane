@@ -153,7 +153,7 @@ export function parseGliderLibrary(csv: string): GliderPolar[] {
 /** The gliders grouped by WHO BUILT THEM, which is how a pilot looks for his own.
  *
  *  The FAI-class grouping above put 106 wings in a single list called `glider`, and a pilot hunting
- *  for his ASW 20 in a scrolling native `<select>`, in flight, with gloves, was expected to find it.
+ *  for his ASW 20 in a scrolling native `<select>`, in flight, one-handed, was expected to find it.
  *  He does not think "Standard class". He thinks "Schleicher".
  *
  *  The manufacturer's LEGAL NAME is what the data holds, faithfully — `Alexander Schleicher GmbH &

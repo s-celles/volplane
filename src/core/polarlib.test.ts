@@ -123,7 +123,7 @@ test('the disambiguator appears where it is needed and NOWHERE else', () => {
 
 test('the biggest group is a list a hand can land on, not a haystack', () => {
   // Grouped by FAI class, 106 wings sat in a single list called `glider` — a pilot hunting for his
-  // ASW 20 in a scrolling native <select>, in flight, with gloves.
+  // ASW 20 in a scrolling native <select>, in flight, one-handed.
   const named = byManufacturer(GLIDER_LIBRARY).filter(g => g.maker !== '');
   expect(Math.max(...named.map(g => g.entries.length))).toBeLessThan(40);
 });

@@ -41,6 +41,8 @@ import { alternatesHtml, styleFilterHtml } from './landables-ui';
 import { varioTone, stfTone } from '../core/vartone';
 import { chooseVoice } from '../core/alarmtone';
 import { circlingTracker } from '../core/circling';
+import { nextPhase, PHASE_BOXES, PHASE_TITLE, type Phase } from '../core/phase';
+import { heroHtml, glideBarHtml } from './flyframe-ui';
 import { circleRose } from '../core/circleassist';
 import {
   terrainAhead, terrainAlarm, DEFAULT_HORIZON_S, type TerrainVerdict,
@@ -165,12 +167,14 @@ const root = document.getElementById('app')!;
 root.innerHTML = `
   <nav class="tabs">
     <button id="tab-fly" class="active" type="button"></button>
+    <button id="tab-nav" type="button"></button>
     <button id="tab-task" type="button"></button>
     <button id="tab-briefing" type="button"></button>
     <button id="tab-analysis" type="button"></button>
     <button id="tab-settings" type="button"></button>
   </nav>
   <div id="fly"></div>
+  <div id="nav" hidden></div>
   <div id="taskedit" hidden></div>
   <div id="briefing" hidden></div>
   <div id="analysis" hidden></div>
@@ -178,6 +182,7 @@ root.innerHTML = `
 `;
 const app = root.querySelector<HTMLElement>('#fly')!;
 const setEl = root.querySelector<HTMLElement>('#settings')!;
+const navEl = root.querySelector<HTMLElement>('#nav')!;
 
 const bf = root.querySelector<HTMLElement>('#briefing')!;
 
@@ -205,8 +210,43 @@ const notYet = missingLinks(platform);
 // data-i18n on an EMPTY span, filled at paint time. A label spelt into the markup here would be a
 // label the catalogue cannot reach, and the one thing worse than an untranslated label is one that
 // looks translated because the tab above it is.
+// ---- THE FLIGHT SCREEN IS AN INSTRUMENT, AND IT USED TO BE A DOCUMENT ----
+//
+// It was a vertical stack — tabs, nine infoboxes, the goal hint, the alerts, the traffic panel, the
+// airspace list, the task panel, THE LIST OF LANDABLE FIELDS, the link status, then the controls —
+// and the map came LAST and got whatever was left. Nine blocks of text between a pilot and the
+// picture of where he is.
+//
+// The mature soaring computers all converge on the same shape, and none of them looks like that:
+//
+//   · the MAP takes 70–85 % of the pixels
+//   · the numbers live in a FIXED FRAME the pilot never has to search, because he reads an
+//     instrument by knowing WHERE a number is, not by reading its label
+//   · the ARRIVAL HEIGHT AT THE GOAL is the hero — the most-read number in the sport — and it is a
+//     BAR, a SIGN and a COLOUR before it is digits
+//   · everything else is allowed to be one tap away, and IS: see the NAV screen
+//
+// The order below is the order the pilot's eye takes: the question at the top, the answer down the
+// left edge, the world in the middle, the six numbers on the right, and the three things he actually
+// touches at the bottom, at a size one hand can hit in turbulence while the other flies the glider.
 app.innerHTML = `
-  <div id="fly-view"></div>
+  <div id="hero-strip"></div>
+  <div class="instrument">
+    <div id="glidebar-slot"></div>
+    <div class="map-frame">
+      <canvas id="map"></canvas>
+      <div id="fly-alerts"></div>
+      <div class="map-zoom">
+        <button id="zoom-in" type="button">+</button>
+        <button id="zoom-out" type="button">−</button>
+      </div>
+      <div id="fly-aside">
+        <div id="xsection" class="xsection-frame"></div>
+        <div id="rose" class="rose-frame"></div>
+      </div>
+    </div>
+    <div id="fly-view"></div>
+  </div>
   <form id="fly-controls" class="fly-controls">
     <label><span data-i18n="fly.mc"></span> <input id="set-mc" size="3" value="1.0" inputmode="decimal" /> m/s</label>
     <button id="set-goal" type="button" data-i18n="fly.goalHere" data-i18n-title="fly.goalHere.title"></button>
@@ -215,17 +255,6 @@ app.innerHTML = `
     <button id="audio-on" type="button" data-i18n-title="fly.audio.title"></button>
     <label><input id="audio-stf" type="checkbox" /> <span data-i18n="fly.stfMode"></span></label>
   </form>
-  <div class="map-frame">
-    <canvas id="map"></canvas>
-    <div class="map-zoom">
-      <button id="zoom-in" type="button">+</button>
-      <button id="zoom-out" type="button">−</button>
-    </div>
-  </div>
-  <div id="fly-aside">
-    <div id="xsection" class="xsection-frame"></div>
-    <div id="rose" class="rose-frame"></div>
-  </div>
 `;
 
 // ---- the SETUP, which is not flying ----
@@ -290,6 +319,14 @@ setEl.innerHTML = `
 
 const panelEl = root.querySelector<HTMLElement>('#settings-panel')!;
 const flyView = root.querySelector<HTMLElement>('#fly-view')!;
+const heroEl = root.querySelector<HTMLElement>('#hero-strip')!;
+const glidebarEl = root.querySelector<HTMLElement>('#glidebar-slot')!;
+const alertsEl = root.querySelector<HTMLElement>('#fly-alerts')!;
+
+/** The phase of the flight, carried between renders because it has HYSTERESIS: an arrival height
+ *  hovering around the reserve would otherwise flip the whole screen back and forth at 1 Hz, and a
+ *  pilot cannot read an instrument that is changing its mind. */
+let phase: Phase = 'cruise';
 const roseEl = root.querySelector<HTMLElement>('#rose')!;
 const linkSel = root.querySelector<HTMLSelectElement>('#linksel')!;
 const hostIn = root.querySelector<HTMLInputElement>('#host')!;
@@ -675,31 +712,75 @@ function render(s: NavState, link: LinkState): void {
   // order, in the pilot's units, out of the registry. The goal's arrival box is no longer a
   // conditional line of markup: it is a box like any other, and it dashes out when there is no
   // goal, because an arrival height without a goal is not a zero, it is a question nobody asked.
-  const page = settings.pages.find(p => p.id === settings.activePageId) ?? settings.pages[0]!;
   const src = boxSource(s, d, mc, stf, estWind, arr);
-  flyView.innerHTML = `
-    ${pageTabsHtml(settings.pages, settings.activePageId, t)}
-    ${boxesHtml(page, src, settings.units, t, { stale })}
-    ${goal ? `<div class="goal-hint" title="${windUsed}">${t('fly.goalBox')} — ${windUsed}</div>` : ''}
-    ${alertsHtml({ flarm: fl, terrain: verdict }, settings.units, t)}
-    ${trafficPanelHtml(fl, traffic.picture(s.fix?.sod ?? 0), settings.units, t)}
-    ${airspaceHtml(s)}
-    ${taskHtml(s)}
-    <div id="alternates">${alternatesHtml({
-      loaded: cup.length > 0,
-      landableCount: cupLandables,
-      haveAlt: s.fix?.alt != null,
-      inRadius,
-      radiusM: DEFAULT_RADIUS_M,
-      judged: alts,                 // the banner speaks for THIS, never for the filtered rows
-      rows: visibleAlts(alts),
-      stale,
-    }, settings.units, t)}</div>
-    <div class="link ${link.state}">${t('fly.link', { state: link.state })}${
-      link.state === 'closed' && link.error ? ` — ${link.error}` : ''
-    }${stale ? ` — ${t('link.stale')}` : ''}${
-      journal?.lastError ? ` — ${t('fly.journalFailing', { error: journal.lastError })}` : ''}</div>
-  `;
+
+  // ---- THE PHASE, which this app has always known and never used ----
+  //
+  // `circling.ts` answers `circling()` on every fix, and the flight screen already reads it — for the
+  // wind rose, and for the terrain alarm, which must not march a straight ray out of a turning
+  // glider. It never once used it for the SCREEN. So the pilot had three pages named `cruise`,
+  // `climb` and `finalGlide`, and to move between them he tapped a tab eight-tenths of a rem tall,
+  // IN A THERMAL. The data was under his hand the whole time.
+  //
+  // The phase changes WHAT stands in the six boxes. It never changes WHERE. A pilot reads an
+  // instrument by knowing where a number lives; a layout that reflows under him has taken away the
+  // only thing that made it glanceable.
+  phase = nextPhase(phase, { circling: circles.circling(), arrivalM: arr?.height ?? null });
+  const page = settings.autoPhase
+    ? { id: phase, titleId: PHASE_TITLE[phase], boxIds: [...PHASE_BOXES[phase]] }
+    : (settings.pages.find(p => p.id === settings.activePageId) ?? settings.pages[0]!);
+
+  heroEl.innerHTML = heroHtml({
+    goalName: goal === null ? null : t('hero.goal'),
+    distM: goal && s.fix ? distM(s.fix.lon, s.fix.lat, goal.lon, goal.lat) : null,
+    arrivalM: arr?.height ?? null,
+    phase,
+    stale,
+  }, settings.units, t);
+  glidebarEl.innerHTML = glideBarHtml(arr?.height ?? null, t);
+
+  // The alerts ride ON the map, not above it. They are TRANSIENT — a terrain warning, a converging
+  // glider — and a transient thing that permanently reserves a row of the layout has stolen that row
+  // from the map for the 99 % of the flight when there is nothing to say.
+  alertsEl.innerHTML = alertsHtml({ flarm: fl, terrain: verdict }, settings.units, t);
+
+  // Six boxes, six slots, and NOTHING ELSE between the pilot and his map.
+  //
+  // The page tabs come back ONLY when the pilot has turned the phase off. That is the whole point of
+  // the setting: he has said he would rather choose, so he must be given something to choose with. A
+  // tab strip that stayed on screen while the phase drove the boxes would be a control that does
+  // nothing — the worst kind, because it looks like it does something.
+  flyView.innerHTML = (settings.autoPhase ? '' : pageTabsHtml(settings.pages, settings.activePageId, t))
+    + boxesHtml(page, src, settings.units, t, { stale });
+
+  // ---- and everything that LEFT ----
+  //
+  // The traffic panel, the airspace list, the task panel, the list of landable fields and the link
+  // status are all real, and none of them belongs between a pilot and his map. They are the fields
+  // pilots themselves turn off first. They live on the NAV screen now: one tap, and it stays there.
+  if (!navEl.hidden) {
+    navEl.innerHTML = `
+      <h2>${t('nav.title')}</h2>
+      <p class="note">${t('nav.note')}</p>
+      ${trafficPanelHtml(fl, traffic.picture(s.fix?.sod ?? 0), settings.units, t)}
+      ${airspaceHtml(s)}
+      ${taskHtml(s)}
+      <div id="alternates">${alternatesHtml({
+        loaded: cup.length > 0,
+        landableCount: cupLandables,
+        haveAlt: s.fix?.alt != null,
+        inRadius,
+        radiusM: DEFAULT_RADIUS_M,
+        judged: alts,                 // the banner speaks for THIS, never for the filtered rows
+        rows: visibleAlts(alts),
+        stale,
+      }, settings.units, t)}</div>
+      <div class="link ${link.state}">${t('fly.link', { state: link.state })}${
+        link.state === 'closed' && link.error ? ` — ${link.error}` : ''
+      }${stale ? ` — ${t('link.stale')}` : ''}${
+        journal?.lastError ? ` — ${t('fly.journalFailing', { error: journal.lastError })}` : ''}</div>
+    `;
+  }
   // THE-001/002: the rose lives OUTSIDE #fly-view, beside the cross-section, because it is a
   // picture of the air and not a row of numbers. No branch here on "is he circling": a null rose
   // draws its own refusal ("not circling — no rose"), which is the honest thing to say and the
@@ -1755,6 +1836,7 @@ onTilesChanged = () => {
 // ---- tabs ----
 
 const tabFly = root.querySelector<HTMLButtonElement>('#tab-fly')!;
+const tabNav = root.querySelector<HTMLButtonElement>('#tab-nav')!;
 const tabTask = root.querySelector<HTMLButtonElement>('#tab-task')!;
 const tabBf = root.querySelector<HTMLButtonElement>('#tab-briefing')!;
 const tabAna = root.querySelector<HTMLButtonElement>('#tab-analysis')!;
@@ -1766,6 +1848,7 @@ const tabSet = root.querySelector<HTMLButtonElement>('#tab-settings')!;
  *  are words, not markup, and the catalogue is not a template engine. */
 function renderChrome(): void {
   tabFly.textContent = t('tab.fly');
+  tabNav.textContent = t('tab.nav');
   tabTask.textContent = t('tab.task');
   tabBf.textContent = t('tab.briefing');
   tabAna.textContent = t('tab.analysis');
@@ -1809,13 +1892,15 @@ function renderFlyChrome(): void {
   root.querySelector<HTMLElement>('#lnd-filter-slot')!.innerHTML = styleFilterHtml(styleFilter, t);
 }
 
-function showTab(which: 'fly' | 'task' | 'briefing' | 'analysis' | 'settings'): void {
+function showTab(which: 'fly' | 'nav' | 'task' | 'briefing' | 'analysis' | 'settings'): void {
   app.hidden = which !== 'fly';
+  navEl.hidden = which !== 'nav';
   taskEl.hidden = which !== 'task';
   bf.hidden = which !== 'briefing';
   ana.hidden = which !== 'analysis';
   setEl.hidden = which !== 'settings';
   tabFly.classList.toggle('active', which === 'fly');
+  tabNav.classList.toggle('active', which === 'nav');
   tabTask.classList.toggle('active', which === 'task');
   tabBf.classList.toggle('active', which === 'briefing');
   tabAna.classList.toggle('active', which === 'analysis');
@@ -1823,6 +1908,10 @@ function showTab(which: 'fly' | 'task' | 'briefing' | 'analysis' | 'settings'): 
   if (which === 'analysis') renderAnalysis();
   if (which === 'settings') renderSettings();
   if (which === 'task') renderTaskEditor();
+  // The NAV screen is painted by render(), and only while it is VISIBLE — the panels it holds are the
+  // expensive ones (a traffic picture, an airspace sweep, a landables judgement), and paying for them
+  // at 1 Hz behind a hidden div is how a flight computer runs a battery down for nothing.
+  if (which === 'nav') render(state, link);
   // Screen entry re-measures here too, and for the same reason the briefing does (OFF-010): tiles
   // land while this screen is hidden — a whole pack's worth, if the pilot went to the Briefing tab
   // to provision one — and onFlyTiles deliberately does not repaint a hidden canvas. Coming back
@@ -1844,6 +1933,7 @@ function showTab(which: 'fly' | 'task' | 'briefing' | 'analysis' | 'settings'): 
   }
 }
 tabFly.onclick = () => showTab('fly');
+tabNav.onclick = () => showTab('nav');
 tabTask.onclick = () => showTab('task');
 tabBf.onclick = () => showTab('briefing');
 tabAna.onclick = () => showTab('analysis');
@@ -2068,6 +2158,11 @@ function onSettingsEvent(e: Event): void {
   const value = (el as HTMLInputElement | HTMLSelectElement).value ?? '';
 
   switch (act) {
+    case 'auto-phase':
+      // The pilot may take the phase away from the machine. Turning it off brings the page tabs back
+      // on the flight screen: he said he would rather choose, so he is given something to choose with.
+      applySettings({ autoPhase: (el as HTMLInputElement).checked });
+      break;
     case 'lang':
       // isLang, not a cast: the <select> is ours today, but a stored or injected value that is
       // not a language we speak must not become the language we try to speak.

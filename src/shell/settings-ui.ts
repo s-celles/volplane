@@ -108,7 +108,7 @@ export function unitsHtml(s: Settings, t: T): string {
 /** Grouped by WHO BUILT THEM, which is how a pilot looks for his own glider.
  *
  *  It used to group by FAI class, and that put 106 wings in a single list called `glider` — a pilot
- *  hunting for his ASW 20 in a scrolling native <select>, in flight, with gloves. He does not think
+ *  hunting for his ASW 20 in a scrolling native <select>, in flight, one-handed. He does not think
  *  "Standard class". He thinks "Schleicher". Nineteen gliders under one heading is a list a hand
  *  can land on; a hundred and six under `glider` is a haystack.
  *
@@ -239,6 +239,9 @@ export const COMMIT_ON: Record<string, 'change' | 'click'> = {
   'box-up': 'click',
   'box-down': 'click',
   'box-remove': 'click',
+  // A CHECKBOX SPEAKS ON `change`. Left out of this table it would render, be tickable, and do
+  // NOTHING — and a control that looks like it works is worse than one that is missing.
+  'auto-phase': 'change',
 };
 
 /** Whether THIS event, on THIS act, is the pilot committing something. Unknown acts commit on
@@ -307,12 +310,34 @@ export function pagesHtml(s: Settings, t: T): string {
  *  the same string, always — no clock, no random id, nothing the shell would have to diff around.
  *  What he chooses here is what he flies with tomorrow (CFG-005), and the writing of that down is
  *  main.ts's job: normalizeSettings, then saveSettings, on every data-act this panel emits. */
+/** Let the six boxes follow the flight — or not.
+ *
+ *  ON by default, because a pilot who has to reconfigure his screen mid-turn is a pilot who will not,
+ *  and will read the wrong numbers.
+ *
+ *  OFFABLE, because the dissent is a good one and it comes from people who fly: a field that changes
+ *  its IDENTITY in silence, under your eyes, is worse than a deliberate swipe. You read the number
+ *  before you read the label, and the number now means something else.
+ *
+ *  When it is off, the page tabs come back on the flight screen — the pilot said he would rather
+ *  choose, so he is given something to choose with. */
+function phaseHtml(s: Settings, t: T): string {
+  return `<section class="settings-group">
+    <h3>${esc(t('fly.autoPhase'))}</h3>
+    <label class="settings-row" title="${esc(t('fly.autoPhase.title'))}">
+      <input type="checkbox" data-act="auto-phase"${s.autoPhase ? ' checked' : ''} />
+      <span>${esc(t('fly.autoPhase.title'))}</span>
+    </label>
+  </section>`;
+}
+
 export function settingsHtml(s: Settings, t: T): string {
   return `<div class="settings">
     <h2>${esc(t('settings.title'))}</h2>
     ${languageHtml(s, t)}
     ${unitsHtml(s, t)}
     ${gliderHtml(s, t)}
+    ${phaseHtml(s, t)}
     ${pagesHtml(s, t)}
   </div>`;
 }

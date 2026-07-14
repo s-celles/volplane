@@ -45,6 +45,18 @@ export interface Settings {
   /** Which page he was on. Always the id of one of `pages` — the normalizer guarantees it, so no
    *  renderer ever has to handle "the active page does not exist". */
   activePageId: string;
+  /** Let the SIX BOXES follow the flight — climb, cruise, final glide — instead of making the pilot
+   *  tap a tab in a thermal.
+   *
+   *  Their POSITIONS never move: only what stands in them. On by default, because a pilot who has to
+   *  reconfigure his screen mid-turn is a pilot who will not, and will read the wrong numbers.
+   *
+   *  And OFFABLE, because the dissent is a good argument and it comes from people who fly: a field
+   *  that changes its IDENTITY in silence, under your eyes, is worse than a deliberate swipe — you
+   *  read the number before you read the label, and the number now means something else. The phase is
+   *  written on the screen for exactly this reason, and a pilot who still dislikes it can have his
+   *  three pages back. */
+  autoPhase: boolean;
   /** The library glider he picked (CFG-002), with the mass he flies it at — that massKg IS the
    *  "adjustable" of "polaires prédéfinies et ajustables". Null massKg means the entry's own
    *  reference mass: we do not invent his ballast (POT-007). Null altogether means he picked no
@@ -60,6 +72,7 @@ export const DEFAULT_SETTINGS: Settings = {
   units: DEFAULT_UNITS,
   pages: DEFAULT_PAGES.map(p => ({ ...p, boxIds: [...p.boxIds] })),
   activePageId: DEFAULT_PAGES[0]!.id,
+  autoPhase: true,
   glider: null,
 };
 
@@ -164,6 +177,10 @@ export function normalizeSettings(raw: unknown): Settings {
     units: repairUnits(r.units),
     pages,
     activePageId: repairActivePage(r.activePageId, pages),
+    // A stored value that is not a boolean is not a preference — it is corruption, and the honest
+    // repair is the default, not `false`. A pilot upgrading into this release has never seen the
+    // setting and should get the behaviour it exists to give him.
+    autoPhase: typeof r.autoPhase === 'boolean' ? r.autoPhase : DEFAULT_SETTINGS.autoPhase,
     glider: repairGlider(r.glider),
   };
 }

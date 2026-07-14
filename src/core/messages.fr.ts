@@ -330,4 +330,20 @@ export const FR: Record<MsgId, string> = {
   'ana.disclaimer': 'Une estimation de bord sur une trace décimée (CNC). Le fichier IGC, coté par le logiciel de la ligue, fait foi — ce chiffre sert à voler, pas à revendiquer.',
   'ana.barograph': 'Barogramme',
   'ana.barographNote': 'Ombré : les ascendances, telles que le détecteur de soaring-core les a trouvées.',
+
+  // ---- le cadre de l'écran de vol : la phase, le héros, la barre ----
+  'phase.circling': 'SPIRALE',
+  'phase.circling.title': 'Le planeur tourne. Les cases disent ce que vaut le thermique : la moyenne sur 30 s, le dernier cercle complet, et la moyenne du thermique lui-même.',
+  'phase.cruise': 'TRANSITION',
+  'phase.cruise.title': 'Entre deux ascendances. Les cases donnent le netto — l’air, débarrassé du planeur — et la vitesse à laquelle le traverser.',
+  'phase.finalGlide': 'ARRIVÉE',
+  'phase.finalGlide.title': 'Le but est atteignable, réserve gardée. La question n’est plus où est la prochaine ascendance : c’est si vous tenez la pente.',
+  'hero.goal': 'BUT',
+  'hero.noGoal': 'pas de but',
+  'hero.glideBar.title': 'Hauteur au-dessus du but à l’arrivée, réserve déjà déduite. Au-dessus du trait et vert : vous y êtes. En dessous et rouge : non.',
+  'tab.nav': 'autour',
+  'nav.title': 'Ce qu’il y a autour de vous',
+  'nav.note': 'Rien de tout ceci n’a sa place entre un pilote et sa carte. C’est à un toucher, et ça y reste.',
+  'fly.autoPhase': 'suivre le vol',
+  'fly.autoPhase.title': 'Bascule les six cases automatiquement entre spirale, transition et arrivée. Leur POSITION ne bouge jamais — seul leur contenu change. À couper si vous préférez qu’un nombre ne change jamais d’identité sous vos yeux.',
 };

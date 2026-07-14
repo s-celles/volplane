@@ -441,3 +441,96 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
 .task-q { width: 100%; padding: .4rem .6rem; margin-bottom: .5rem; }
 .task-hit { display: block; width: 100%; text-align: left; padding: .35rem .6rem; margin-bottom: .2rem; }
 .task-empty, .task-more { color: var(--dim); font-size: .85rem; }
+
+/* ============ THE FLIGHT SCREEN IS AN INSTRUMENT ============
+ *
+ * It was a document: tabs, nine infoboxes, the goal hint, the alerts, the traffic panel, the airspace
+ * list, the task panel, THE LIST OF LANDABLE FIELDS, the link status — and then, at the bottom, with
+ * whatever pixels were left, the map. Nine blocks of text between a pilot and the picture of where he
+ * is.
+ *
+ * Every mature soaring computer converges on the same shape and none of them looks like that: the map
+ * takes 70–85 % of the screen, the numbers live in a FIXED frame the pilot never has to search, and
+ * the arrival height at the goal — the most-read number in the sport — is a BAR before it is digits.
+ */
+
+/* ---- the hero: the one question, across the top ---- */
+.hero {
+  display: flex; align-items: baseline; gap: 1rem;
+  padding: .5rem .9rem; border-radius: .5rem; background: #151920;
+  border-left: .35rem solid var(--dim);
+}
+.hero.above { border-left-color: var(--good, #3ba55d); }
+.hero.below { border-left-color: var(--bad); }
+.hero.stale { opacity: .55; }
+.hero-phase {
+  font-size: .75rem; font-weight: 700; letter-spacing: .1em;
+  color: var(--dim); padding: .15rem .45rem; border: 1px solid #2a313c; border-radius: .25rem;
+}
+.hero-goal { font-size: 1rem; letter-spacing: .08em; color: var(--dim); text-transform: uppercase; }
+.hero-dist { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+/* THE HERO NUMBER. It is the largest thing on the screen after the map, and it is the only number a
+ * pilot on a marginal final glide must be able to read while being thrown about. */
+.hero-arrival {
+  margin-left: auto;
+  font-size: 2.6rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1;
+}
+.hero-arrival.above { color: var(--good, #3ba55d); }
+.hero-arrival.below { color: var(--bad); }
+.hero-arrival.unknown { color: var(--dim); }
+.hero-none { margin-left: auto; color: var(--dim); font-size: 1.1rem; }
+
+/* ---- the instrument: rail | map | six boxes ---- */
+.instrument { flex: 1; min-height: 0; display: flex; gap: .5rem; }
+.instrument .map-frame { flex: 1; min-width: 0; }
+
+/* THE GLIDE BAR. Green upward = you arrive. Red downward = you do not. Sign, colour and direction all
+ * say the same thing, because a screen in direct sunlight will lose one of the three and a pilot in
+ * turbulence reads a direction faster than he reads three digits. */
+/* The SLOT must be a flex container too, or the bar has no height to fill and collapses into a
+ * sliver at the top of the map — which is exactly what it did the first time it was drawn. A rail
+ * that does not span the picture is not an instrument, it is a smudge. */
+#glidebar-slot { display: flex; flex: none; }
+.glidebar { width: 1.6rem; flex: none; display: flex; }
+.glidebar-rail {
+  position: relative; flex: 1; border-radius: .3rem; background: #151920; border: 1px solid #2a313c;
+}
+.glidebar-fill { position: absolute; left: 0; right: 0; border-radius: .2rem; }
+.glidebar-fill.above { background: var(--good, #3ba55d); }
+.glidebar-fill.below { background: var(--bad); }
+/* The centre line is the RESERVE, not the ground: on the line already means arriving with the reserve
+ * still in hand, which is the only definition of arriving that is any use. */
+.glidebar-zero { position: absolute; left: 0; right: 0; top: 50%; height: 2px; background: var(--fg); opacity: .5; }
+
+/* The six boxes: a fixed column the pilot never has to search. The PHASE changes what stands in them.
+ * It never changes where. */
+#fly-view { width: 11rem; flex: none; overflow: hidden; }
+#fly-view .boxes { grid-template-columns: 1fr; gap: .4rem; }
+/* And they are BIG. 1.6 rem was a desktop dashboard; this is a canopy in the sun. */
+#fly-view .box .v { font-size: 2rem; }
+#fly-view .box .k { font-size: .75rem; }
+
+/* The alerts ride ON the map. They are transient — a terrain warning, a converging glider — and a
+ * transient thing that permanently reserves a row of the layout has stolen that row from the map for
+ * the 99 % of the flight when there is nothing to say. */
+#fly-alerts { position: absolute; top: .5rem; left: .5rem; right: .5rem; pointer-events: none; }
+#fly-alerts:empty { display: none; }
+#fly-alerts .alert, #fly-alerts .flarm { margin: 0 0 .4rem; pointer-events: auto; background: #151920ee; }
+
+/* ---- WHAT ONE HAND CAN HIT WHILE THE OTHER FLIES THE GLIDER ----
+ *
+ * The first draft of this comment said `what a gloved hand can hit`, which is a sentence I imported
+ * from cockpit research without ever asking whether it was true of THIS cockpit. NOBODY FLIES A
+ * GLIDER IN GLOVES. It is a false reason, and a false reason for a true rule is how a rule survives
+ * past the day it stops being right.
+ *
+ * The true reasons are enough on their own: the aircraft is moving under him, ONE HAND IS ON THE
+ * STICK, and he is looking out — the screen gets a glance, not a gaze. Flight-deck research measures
+ * exactly that: a touch target under vibration wants 18–22 mm, error rate grows EXPONENTIALLY as the
+ * target shrinks, and vibration alone takes it from 10 % to 17 %. Those numbers are about the moving
+ * aircraft, not the glove.
+ *
+ * These buttons were 30 px tall, and the zoom pair 24 px.
+ */
+.fly-controls button, .fly-controls input { min-height: 3rem; font-size: 1rem; }
+.map-zoom button { width: 3rem; height: 3rem; font-size: 1.4rem; padding: 0; }

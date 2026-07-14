@@ -351,4 +351,20 @@ export const EN = {
   'ana.disclaimer': 'A cockpit estimate on a decimated track (CNC). The IGC file, scored by the league’s own software, is the judge of record — this number is for flying by, not for claiming with.',
   'ana.barograph': 'Barograph',
   'ana.barographNote': 'Shaded: the climbs, as soaring-core’s detector found them.',
+
+  // ---- the flight screen's frame: the phase, the hero, the bar ----
+  'phase.circling': 'CLIMB',
+  'phase.circling.title': 'The glider is circling. The boxes show what the thermal is worth: the 30-second average, the last complete circle, and the thermal’s own average.',
+  'phase.cruise': 'CRUISE',
+  'phase.cruise.title': 'Between climbs. The boxes show netto — the air, stripped of the glider — and the speed to fly it at.',
+  'phase.finalGlide': 'FINAL GLIDE',
+  'phase.finalGlide.title': 'The goal is reachable with the reserve still in hand. The question is no longer where the next climb is, it is whether you are holding the slope.',
+  'hero.goal': 'GOAL',
+  'hero.noGoal': 'no goal',
+  'hero.glideBar.title': 'Height above the goal on arrival, reserve already spent. Above the line and green: you arrive. Below and red: you do not.',
+  'tab.nav': 'nav',
+  'nav.title': 'What is around you',
+  'nav.note': 'None of this belongs between a pilot and his map. It is one tap away, and it stays there.',
+  'fly.autoPhase': 'follow the flight',
+  'fly.autoPhase.title': 'Switch the six boxes automatically between climb, cruise and final glide. Their POSITIONS never move — only what stands in them. Turn it off if you would rather the numbers never changed identity under you.',
 } as const satisfies Record<string, string>;
