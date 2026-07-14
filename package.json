@@ -1,6 +1,6 @@
 {
   "name": "volplane",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "type": "module",
   "description": "A free soaring flight computer.",
@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "soaring-core": "github:s-celles/soaring-core#v0.6.0",
-    "soaring-data": "github:s-celles/soaring-data#v0.10.0",
+    "soaring-data": "github:s-celles/soaring-data#v0.11.0",
     "upng-js": "^2.1.0"
   },
   "devDependencies": {
