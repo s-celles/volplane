@@ -166,6 +166,8 @@ function repairGlider(v: unknown): Settings['glider'] {
  *  his preferences, never his startup). Field by field: a mangled polar costs the polar
  *  alone, never the budget or the classes. Always a fresh object: handing out
  *  DEFAULT_SETTINGS itself would let one caller's edit rewrite everyone's default. */
+// CFG-001: the glider's characteristics the pilot may enter — his polar (an imported .plr, or a library pick)
+// and the all-up mass he flies it at — are held HERE and rebuilt from untrusted disk bytes, so they survive a restart.
 export function normalizeSettings(raw: unknown): Settings {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
 

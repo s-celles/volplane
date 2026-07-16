@@ -185,6 +185,8 @@ export function parseLayout(text: string): ParseResult {
 }
 
 /** Write one out, for the pilot to keep, diff, share, or open in whatever he already uses. */
+// CFG-006: this is the app's ONLY export door — the layout leaves as a JSON file the pilot can keep,
+// diff and load back; the rest of the config, and the points, airspaces and tasks, are import-only.
 export function serializeLayout(l: Layout): string {
   return JSON.stringify({ volplane: FORMAT, name: l.name, phases: l.phases }, null, 2) + '\n';
 }

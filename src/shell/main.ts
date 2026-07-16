@@ -909,6 +909,8 @@ function readStyleFilter(): PoiCat[] | null {
 for (const id of ['#fly-controls', '#setup']) {
   const form = root.querySelector<HTMLFormElement>(id);
   if (form === null) continue;
+// PLA-003: the MC box lives in this form, so changing it re-enters render() AT ONCE — speed to fly
+// and the final-glide arrival are recomputed and repainted there, without waiting for the next fix.
   form.oninput = () => {
     styleFilter = readStyleFilter();
     render(state, link);
@@ -1091,6 +1093,8 @@ const plrLabel = root.querySelector('#plr-label') as HTMLElement;
 // ---- the view, and the three things a pilot does to it ----
 
 const MIN_WIDTH_M = 2_000, MAX_WIDTH_M = 200_000;
+// CAR-003: the pinch's factor lands here and rescales the map — mapWidthM IS the display scale, and it is
+// CLAMPED, because a pinch that overshoots must reach a limit rather than a map of the whole planet or of nothing.
 const zoomBy = (factor: number): void => {
   mapWidthM = Math.max(MIN_WIDTH_M, Math.min(MAX_WIDTH_M, mapWidthM * factor));
   render(state, link);
@@ -1137,6 +1141,8 @@ const panBy = (dxPx: number, dyPx: number): void => {
 const gestures = recogniser();
 const mapEl = root.querySelector<HTMLCanvasElement>('#map')!;
 
+// IHM-003: every gesture the recogniser names is EXECUTED here — pan moves the map, pinch zooms it,
+// double tap resets the view — and a gesture it does not name ('none') does NOTHING, on purpose.
 const apply = (g: Gesture): void => {
   switch (g.kind) {
     case 'pan': panBy(g.dxPx, g.dyPx); break;

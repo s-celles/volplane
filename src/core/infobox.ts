@@ -119,6 +119,8 @@ export const BOXES: readonly BoxDef[] = [
     badgeId: 'badge.estimated', badgeTitleId: 'badge.estimated.title', get: s => s.windSpeedMs,
   },
   {
+  // ACQ-014: these two boxes show the wind the SIMULATOR reports — the ground truth — right next to
+  // the badged wind we estimate from circle drift, so the pilot can judge the estimate against the answer.
     id: 'instWindDir', labelId: 'box.instWindDir', quantity: null, fixedUnit: '°', digits: 0,
     get: s => s.instWindDirDeg,
   },

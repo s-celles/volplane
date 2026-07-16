@@ -181,7 +181,10 @@ export interface TaskProgress {
 export const freshProgress = (t: Task): TaskProgress =>
   ({ next: 0, validatedAt: t.points.map(() => null) });
 
+// TSK-005: the start is task point 0, so the FIRST fix that satisfies the start gate stamps its
+// second-of-day into validatedAt[0] — the task clock, written once and never re-written.
 /** Fold one fix in. Pure: progress in, progress out; identity when nothing validates. */
+// TSK-004: the crossing is judged HERE — the first fix inside the sector of point `next` VALIDATES it (its second-of-day stamped, never erased) and ACTIVATES the following one by advancing `next`.
 export function advance(
   t: Task, p: TaskProgress, lon: number, lat: number, sod: number,
 ): TaskProgress {

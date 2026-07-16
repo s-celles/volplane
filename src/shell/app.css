@@ -532,6 +532,7 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
  *
  * These buttons were 30 px tall, and the zoom pair 24 px.
  */
+/* IHM-005: every in-flight command is a POINTER target, sized for one hand in a moving aircraft — the app binds no keyboard event anywhere, though the numeric fields still fall back to the OS on-screen keyboard. */
 .fly-controls button, .fly-controls input { min-height: 3rem; font-size: 1rem; }
 .map-zoom button { width: 3rem; height: 3rem; font-size: 1.4rem; padding: 0; }
 

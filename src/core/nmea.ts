@@ -71,6 +71,8 @@ function coord(v: string | undefined, hemi: string | undefined): number | undefi
   return hemi === 'S' || hemi === 'W' ? -d : d;
 }
 
+// SYS-004: every fix enters on ONE clock here — seconds since midnight UTC — so the logger, the
+// task timer, the traffic picture and the briefing all age against the same base, never local time.
 /** hhmmss.sss → seconds since midnight UTC. */
 function sod(v: string | undefined): number | undefined {
   const t = num(v);
@@ -91,10 +93,14 @@ const KNOTS_TO_MS = 0.514444;
  *  drivers: Condor 3 changed the wind-direction convention in $LXWP0. Read a Condor 3 stream
  *  with the Condor 2 driver and the wind comes out REVERSED — silently, plausibly, and with
  *  the pilot trusting it. XCSoar had to ship two separate drivers for exactly this. */
+// ACQ-004: this union IS the driver library the pilot picks from (the #driver select in shell/main.ts) —
+// but it is a hand-written list, not a registry: a new driver must be added here, in parse(), AND in the picker.
 export type Driver = 'generic' | 'condor2' | 'condor3';
 
 /** Parse one sentence. Returns null when the line is malformed, has a bad checksum, or simply
  *  carries nothing we use. Never throws, never partially applies (ACQ-005). */
+// ACQ-002: a valid sentence yields position, GPS altitude, track, ground speed and UTC time here —
+// GGA carries the altitude, RMC the speed and track, and knots become m/s before anyone reads them.
 export function parse(line: string, driver: Driver = 'generic'): Reading | null {
   if (!isValid(line)) return null;
   const body = line.slice(1, line.lastIndexOf('*'));

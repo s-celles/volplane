@@ -5,6 +5,8 @@
 // Swap this file and the flight computer runs under Capacitor, or in a browser, or in a test,
 // without noticing. That is not a hypothetical: `replaySource` below is exactly that swap, and
 // it is what makes ACQ-010 (replay) free.
+// OFF-012: this is the seam to the native Tauri shell — in a release build the frontend is loaded
+// straight off disk from `frontendDist`, so VOLPLANE runs as an INSTALLED executable with no server listening and no browser open.
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { Device, DeviceSource } from '../core/device';
@@ -50,6 +52,8 @@ function eventStream(): AsyncIterable<string> {
  *  successor. The one Tauri invoke the screen needs by name, kept here with the others. */
 export const closeLinks = (): Promise<void> => invoke('close_all');
 
+// ACQ-011: both NMEA transports enter here — a TCP connection to an instrument or Condor, and a
+// UDP socket LISTENING for broadcast; each becomes the same stream of sentences, and nothing above knows which.
 /** Condor, or any instrument speaking NMEA over TCP. Condor's default is port 4353 — on the
  *  same PC (127.0.0.1) or on the PC's LAN address from a tablet. */
 export const tcpDevice = (host: string, port = 4353): Device => ({

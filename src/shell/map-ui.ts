@@ -298,6 +298,8 @@ function paintTask(
   ctx.globalAlpha = 1;
 }
 
+// TSK-010 (partial): the airfields and the outlanding fields are drawn here, and the summits come
+// from the shipped landmarks layer below — but a .cup OBSTACLE is parsed, named, and drawn by nobody.
 /** LND-003, on the canvas. Every field wears its state's colour and nothing else decides it —
  *  core judged, the painter paints. The type is read from the ring: a gliding airfield is filled,
  *  an outlanding field is hollow. Only the TOP reachable field is named, because the map is not
@@ -471,6 +473,8 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput, t: T): vo
   // The reach, when the terrain has been marched (TER-005). Each edge segment is drawn in the
   // colour of ITS OWN limit, so a red arc is not decoration: it is a wall, and the ground
   // behind it cannot be had. This is the whole reason the circle below is only a fallback.
+// CAR-007: this is where the reachable glide range is DRAWN around the current position — one
+  // coloured edge per bearing, and nothing at all when the reach could not honestly be marched.
   if (reach && reach.length > 1 && s.fix) {
     ctx.globalAlpha = 0.75;
     ctx.lineWidth = 2;
@@ -533,6 +537,8 @@ export function paintMap(ctx: MapPaint2D, view: View, input: MapInput, t: T): vo
 
   if (s.fix) {
     const [x, y] = project(view, s.fix.lon, s.fix.lat);
+// CAR-001: this is the glider itself on the georeferenced moving map — POSITION from the last fix,
+// projected like every other layer, and ORIENTATION from its ground track, not from a guess.
     const rad = ((s.track ?? 0) - 90) * Math.PI / 180;   // canvas 0 rad points east
     ctx.fillStyle = '#e8eaed';
     ctx.globalAlpha = 1;

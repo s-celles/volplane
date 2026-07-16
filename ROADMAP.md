@@ -2,6 +2,13 @@
 
 A free soaring flight computer. Requirements: [`spec-volplane.md`](../spec-volplane.md) (**v0.4**, in French).
 
+> **This prose used to be the record of what is built, and it lied — it once claimed 66 of 69 when
+> three did not exist.** A hand-kept list drifts, and it drifts flatteringly, because nobody deletes a
+> line that says they finished something. The record is now [`spec-coverage.csv`](spec-coverage.csv),
+> and it is CHECKED: `just coverage` fails the build on any requirement marked `built` that no source
+> file names, on any `absent` with no reason written down, and on any requirement nobody has looked at
+> at all. A build that goes green over an open question has learned to lie; this one refuses to.
+
 ---
 
 ## This document was lying, and here is what it said

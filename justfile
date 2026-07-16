@@ -25,7 +25,7 @@ typecheck:
     bun run typecheck
 
 # Everything a commit should pass: type-check, core tests, shell tests
-check: typecheck test test-rust
+check: typecheck test test-rust coverage
 
 # The Condor stand-in: NMEA on tcp://127.0.0.1:{{nmea_port}} — run `just dev` in another terminal, click Connect
 sim port=nmea_port:
@@ -46,3 +46,17 @@ icons:
 # Remove build output (frontend bundle and Rust target)
 clean:
     rm -rf dist src-tauri/target
+
+# What is built, what is not — and a table that cannot lie about it.
+# It FAILS on an `unverified` row: a requirement nobody has looked at is not done and is not
+# missing. It is a question, and a build that goes green over an open question has learned to lie.
+coverage:
+    bun run scripts/coverage.ts
+
+# Android debug build (arm64)
+android:
+    bun run tauri android build --debug --target aarch64
+
+# Android dev build and install
+android-dev:
+    bun run tauri android dev

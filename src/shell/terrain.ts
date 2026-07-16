@@ -74,6 +74,7 @@ export function terrainStore(
       // that fails to read is treated like a store that holds nothing — the network below
       // is the same fallback either way.
       if (kv) {
+// TER-007: the cached tile on disk is read BEFORE the network, so relief (and the map drawn over it) renders from local data alone.
         const stored = await kv.get(`tile/${key}`).catch(() => null);
         if (stored) {
           decodeInto(key, pngBuffer(stored));
