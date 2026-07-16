@@ -84,7 +84,7 @@ export const DEFAULT_LAYOUT: Layout = {
   phases: {
     circling: ['avg30', 'lastCircle', 'lastThermal', 'alt', 'agl', 'windSpeed'],
     cruise: ['netto', 'stf', 'groundSpeed', 'alt', 'agl', 'windSpeed'],
-    finalGlide: ['mc', 'stf', 'groundSpeed', 'alt', 'agl', 'windSpeed'],
+    finalGlide: ['ldReq', 'ldAch', 'mc', 'stf', 'alt', 'agl'],
   },
 };
 

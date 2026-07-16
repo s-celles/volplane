@@ -3,7 +3,7 @@
 import { test, expect } from 'bun:test';
 import {
   parseLayout, serializeLayout, editLayout, sanitizeLayout, defaultLayout,
-  FORMAT, MIN_SLOTS, MAX_SLOTS, PHASES,
+  FORMAT, MIN_SLOTS, MAX_SLOTS, PHASES, DEFAULT_LAYOUT,
 } from './layout';
 
 const file = (o: unknown) => JSON.stringify(o);
@@ -165,4 +165,22 @@ test('garbage off disk boots the DEFAULT, not a blank screen', () => {
   // A flight computer that boots to nothing because of a corrupt preference is not a flight computer.
   expect(sanitizeLayout(null)).toEqual(defaultLayout());
   expect(sanitizeLayout('nope')).toEqual(defaultLayout());
+});
+
+test('every phase row is the FULL six slots, and none carries the arrival — that is the hero', () => {
+  // These were once asserted against phase.ts's PHASE_BOXES, a constant that has since died: the
+  // layout is the single source of the default rows now. The arrival height is NOT a box — it is the
+  // top strip's bar-and-sign, because a pilot on a marginal glide should not have to read a number.
+  for (const p of PHASES) {
+    expect(DEFAULT_LAYOUT.phases[p].length).toBe(6);
+    expect(DEFAULT_LAYOUT.phases[p]).not.toContain('arrival');
+  }
+});
+
+test('final glide carries the finesse PAIR, because that is the question in a final glide', () => {
+  // required vs achieved (PLA-006). The wind left this row to make space, and that is a deliberate
+  // trade: the arrival height in the hero already prices the headwind, so a wind box here would be
+  // saying twice what the bar already says once.
+  expect(DEFAULT_LAYOUT.phases.finalGlide).toContain('ldReq');
+  expect(DEFAULT_LAYOUT.phases.finalGlide).toContain('ldAch');
 });

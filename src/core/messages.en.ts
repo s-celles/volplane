@@ -404,4 +404,8 @@ export const EN = {
   'orient.degraded.no-target': 'Target up asked for, but there is no goal — showing north.',
   'orient.degraded.no-track': 'Track up asked for, but you are too slow for a course to mean anything — showing north.',
   'orient.degraded.circling': 'Track up held at north while circling: following the turn would spin the map.',
+
+  // ---- PLA-006: required vs achieved glide ----
+  'box.ldReq': 'L/D req',
+  'box.ldAch': 'L/D now',
 } as const satisfies Record<string, string>;

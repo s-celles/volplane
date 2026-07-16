@@ -18,6 +18,7 @@ import { lines, withHealth, type Device, type LinkState } from '../core/device';
 import { igcToSentences } from '../core/replay';
 import { derive, rollingVario } from '../core/compute';
 import { speedToFly, arrival, glideRatio } from '../core/glide';
+import { requiredGlide, glideWindow } from '../core/finesse';
 import { windEstimator } from '../core/wind';
 import { parsePflau, parsePflaa, trafficStore, freshStatus, type FlarmStatus } from '../core/flarm';
 import { igcLogger, type IgcLogger } from '../core/igclog';
@@ -412,6 +413,7 @@ let estimator = windEstimator();                   // VEN-001: OUR wind, never m
 let avgVario = rollingVario(30);                   // POS-006
 let circles = circlingTracker();                   // VAR-006: the last thermal, the last circle
 let rose = circleRose();                           // THE-001/002: where the lift was, around the turn
+let glide = glideWindow();                         // PLA-006: the glide ratio the last minute ACHIEVED
 /** THE PLACE THE FINAL GLIDE IS TO. It carries a NAME now — the whole of TSK-011 is that this can be
  *  Saint-Auban and not "here". Null name is the legitimate case of the `goal: here` button, which
  *  aims at a spot with no name because the spot IS the pilot. */
@@ -532,6 +534,7 @@ function resetFlight(): void {
   avgVario = rollingVario(30);
   circles = circlingTracker();
   rose = circleRose();
+  glide = glideWindow();
   terrAlarm = terrainAlarm();
   traffic = trafficStore();
   verdict = { kind: 'clear' };
@@ -764,6 +767,7 @@ function boxSource(
   s: NavState, d: ReturnType<typeof derive>, mc: number, stf: number,
   estWind: { direction: number; speed: number } | null,
   arr: ReturnType<typeof arrival>,
+  requiredLD: number | null, achievedLD: number | null,
 ): BoxSource {
   return {
     latDeg: s.fix?.lat ?? null,
@@ -787,6 +791,8 @@ function boxSource(
     instWindSpeedMs: s.reportedWind?.speed ?? null,
     arrivalM: arr?.height ?? null,
     mcMs: mc,
+    ldRequired: requiredLD,
+    ldAchieved: achievedLD,
   };
 }
 
@@ -811,6 +817,17 @@ function render(s: NavState, link: LinkState): void {
     arr = arrival(polar, mc, s.fix.alt, dist, goal.elev, head, reserve);
   }
 
+  // PLA-006: the ground finesse the geometry REQUIRES to reach the goal (reserve spent first), and
+  // the one the last minute of flight ACHIEVED. Two numbers from two different places — one a
+  // statement about the map, the other a measurement of the air — laid side by side so the pilot
+  // reads whether this glide arrives. Each is null on its own terms: required has no goal to need,
+  // achieved refuses a circling or too-short window. compareGlide holds the verdict; it is not shown
+  // as colour yet, because that would be a change to the shared box renderer and this is not it.
+  const requiredLD = goal && s.fix?.alt != null
+    ? requiredGlide(distM(s.fix.lon, s.fix.lat, goal.lon, goal.lat), s.fix.alt, goal.elev, reserve)
+    : null;
+  const achievedLD = glide.achieved()?.ld ?? null;
+
   // SYS-002: a silent or closed source degrades the DISPLAY, not the application. The last
   // known values stay — a pilot mid-turn must not lose his numbers — but they visibly age:
   // dimmed, and captioned with what happened. A screen that keeps showing a dead
@@ -834,7 +851,7 @@ function render(s: NavState, link: LinkState): void {
   // order, in the pilot's units, out of the registry. The goal's arrival box is no longer a
   // conditional line of markup: it is a box like any other, and it dashes out when there is no
   // goal, because an arrival height without a goal is not a zero, it is a question nobody asked.
-  const src = boxSource(s, d, mc, stf, estWind, arr);
+  const src = boxSource(s, d, mc, stf, estWind, arr, requiredLD, achievedLD);
 
   // ---- THE PHASE, which this app has always known and never used ----
   //
@@ -1438,6 +1455,10 @@ async function run(dev: Device): Promise<void> {
         estimator.add(state.fix.lon, state.fix.lat, state.fix.alt, state.fix.sod);
         circles.add(state.fix.sod, state.fix.lon, state.fix.lat, state.fix.alt);
         rose.add(state.fix.sod, state.fix.lon, state.fix.lat, state.fix.alt, state.vario ?? null);
+        // PLA-006: only here, on a genuine fix. glideWindow RESETS on a non-advancing sod (a replay
+        // seek, midnight), so feeding it from render() — which fires on tab switches and gestures too
+        // — would wipe the minute of flight it had gathered every time the pilot touched the screen.
+        glide.add({ sod: state.fix.sod, lon: state.fix.lon, lat: state.fix.lat, altM: state.fix.alt });
       }
       if (state.vario != null) avgVario.add(state.fix.sod, state.vario);
       // TER-008: judged HERE, on the fix, and kept — the banner and the speaker below both read

@@ -69,30 +69,6 @@ export function nextPhase(prev: Phase, i: PhaseInput): Phase {
   return i.arrivalM >= ENTER_M ? 'finalGlide' : 'cruise';
 }
 
-/** The six boxes of each phase, in their six fixed slots.
- *
- *  Chosen from what the pilot ACTUALLY reads, which is not the same as what we can compute:
- *
- *   · CIRCLING — the thermal's worth. The average over 30 s says whether it is still working, the
- *     last complete circle says whether THIS turn was better than the last, the thermal's own
- *     average says whether it beat the MacCready you set. Height is there because a thermal you are
- *     leaving is a height you have.
- *
- *   · CRUISE — netto is the air, stripped of the glider: it is the only number that says whether
- *     what you just flew through was lift. Speed to fly is what to do about it. The wind is why the
- *     next glide will not be the last one.
- *
- *   · FINAL GLIDE — the arrival height is NOT here, and that is deliberate: it is the hero of the
- *     top strip, drawn as a bar with a sign and a colour, because a pilot on a marginal glide should
- *     not have to READ. What is here is what he changes: MacCready, and the speed it asks for.
- *
- *  Wind is in all three. It is the one thing that is true of the whole flight. */
-export const PHASE_BOXES: Readonly<Record<Phase, readonly BoxId[]>> = {
-  circling: ['avg30', 'lastCircle', 'lastThermal', 'alt', 'agl', 'windSpeed'],
-  cruise: ['netto', 'stf', 'groundSpeed', 'alt', 'agl', 'windSpeed'],
-  finalGlide: ['mc', 'stf', 'groundSpeed', 'alt', 'agl', 'windSpeed'],
-};
-
 /** The phase's own name, as a catalogue id. Spelt here and nowhere else: a phase whose label lived
  *  in the shell would be a phase the catalogue cannot reach, and a half-translated instrument is
  *  worse than an untranslated one — the half that stays English is the half he reads under load. */

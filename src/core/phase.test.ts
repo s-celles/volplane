@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { nextPhase, glideBar, PHASE_BOXES, FULL_M, type Phase } from './phase';
+import { nextPhase, glideBar, FULL_M, type Phase } from './phase';
 
 const at = (prev: Phase, circling: boolean, arrivalM: number | null): Phase =>
   nextPhase(prev, { circling, arrivalM });
@@ -39,32 +39,6 @@ test('leaving a thermal on the slope goes straight back to final glide', () => {
   expect(at('circling', false, 300)).toBe('finalGlide');
   expect(at('circling', false, -200)).toBe('cruise');
 });
-
-// ---- the six slots ----
-
-test('SIX SLOTS, ALWAYS SIX, and the phase decides only what STANDS in them', () => {
-  // The content changes. The positions do not. A pilot reads an instrument by knowing WHERE a number
-  // lives — a layout that reflows under him has taken away the only thing that made it glanceable.
-  for (const p of ['circling', 'cruise', 'finalGlide'] as const) {
-    expect(PHASE_BOXES[p].length).toBe(6);
-  }
-});
-
-test('the wind is in all three, because it is the one thing true of the whole flight', () => {
-  for (const p of ['circling', 'cruise', 'finalGlide'] as const) {
-    expect(PHASE_BOXES[p]).toContain('windSpeed');
-  }
-});
-
-test('the ARRIVAL HEIGHT is in none of them, and that is the point', () => {
-  // It is the hero of the top strip, drawn as a bar with a sign and a colour. A pilot on a marginal
-  // final glide should not have to READ.
-  for (const p of ['circling', 'cruise', 'finalGlide'] as const) {
-    expect(PHASE_BOXES[p]).not.toContain('arrival');
-  }
-});
-
-// ---- the bar ----
 
 test('the bar is the instrument and the number is the caption', () => {
   expect(glideBar(150)).toEqual({ frac: 0.5, state: 'above' });

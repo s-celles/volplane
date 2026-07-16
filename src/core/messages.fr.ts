@@ -383,4 +383,8 @@ export const FR: Record<MsgId, string> = {
   'orient.degraded.no-target': 'Cible en haut demandée, mais il n’y a pas de but — nord affiché.',
   'orient.degraded.no-track': 'Route en haut demandée, mais vous êtes trop lent pour qu’une route ait un sens — nord affiché.',
   'orient.degraded.circling': 'Route en haut maintenue au nord en spirale : suivre le virage ferait tourner la carte.',
+
+  // ---- PLA-006: required vs achieved glide ----
+  'box.ldReq': 'fin. req',
+  'box.ldAch': 'fin. réelle',
 };

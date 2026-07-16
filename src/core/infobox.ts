@@ -55,6 +55,11 @@ export interface BoxSource {
   instWindSpeedMs: number | null;
   arrivalM: number | null;
   mcMs: number | null;
+  /** PLA-006: the ground finesse the geometry REQUIRES to reach the goal, and the one the last
+   *  minute ACHIEVED. Dimensionless — a glide ratio is metres per metre — and null the moment either
+   *  cannot be had (no goal to need; a circling or too-short window to measure). */
+  ldRequired: number | null;
+  ldAchieved: number | null;
 }
 
 export type BoxId =
@@ -62,7 +67,8 @@ export type BoxId =
   | 'vario' | 'avg30' | 'lastThermal' | 'lastCircle' | 'netto' | 'superNetto'
   | 'tas' | 'groundSpeed' | 'stf'
   | 'windDir' | 'windSpeed' | 'instWindDir' | 'instWindSpeed'
-  | 'arrival' | 'mc';
+  | 'arrival' | 'mc'
+  | 'ldReq' | 'ldAch';
 
 /** One box, as a value.
  *
@@ -128,6 +134,12 @@ export const BOXES: readonly BoxDef[] = [
 
   { id: 'arrival', labelId: 'box.arrival', quantity: 'altitude', get: s => s.arrivalM },
   { id: 'mc', labelId: 'box.mc', quantity: 'vario', get: s => s.mcMs },
+
+  // PLA-006: a glide ratio has no unit. Shown to the whole number — the tenths are noise a pilot
+  // cannot fly to, and a required 38.2 beside an achieved 41.7 invites a comparison finer than
+  // either number can honestly support.
+  { id: 'ldReq', labelId: 'box.ldReq', quantity: null, fixedUnit: '', digits: 0, get: s => s.ldRequired },
+  { id: 'ldAch', labelId: 'box.ldAch', quantity: null, fixedUnit: '', digits: 0, get: s => s.ldAchieved },
 ];
 
 export const BOX_BY_ID: ReadonlyMap<BoxId, BoxDef> = new Map(BOXES.map(b => [b.id, b]));

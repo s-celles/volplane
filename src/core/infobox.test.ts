@@ -18,6 +18,7 @@ const ALL_NULL: BoxSource = {
   tasMs: null, groundSpeedMs: null, stfMs: null,
   windDirDeg: null, windSpeedMs: null, instWindDirDeg: null, instWindSpeedMs: null,
   arrivalM: null, mcMs: null,
+  ldRequired: null, ldAchieved: null,
 };
 
 test('every box has a label in every catalogue we ship', () => {
@@ -55,7 +56,7 @@ test('a box names a Quantity or a fixed unit — never both, never neither', () 
   }
   // The four that are degrees on every panel on earth, and nothing else.
   expect(BOXES.filter(b => b.quantity === null).map(b => b.id))
-    .toEqual(['lat', 'lon', 'windDir', 'instWindDir']);
+    .toEqual(['lat', 'lon', 'windDir', 'instWindDir', 'ldReq', 'ldAch']);
 });
 
 test('no box invents a zero out of an absent fix (POT-007)', () => {
