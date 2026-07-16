@@ -43,6 +43,8 @@ import { chooseVoice } from '../core/alarmtone';
 import { circlingTracker } from '../core/circling';
 import { nextPhase, type Phase } from '../core/phase';
 import { recogniser, type Gesture } from '../core/gesture';
+import { gotoSearch, type GotoResult } from '../core/goto';
+import { gotoResultsHtml } from './goto-ui';
 import { heroHtml, glideBarHtml } from './flyframe-ui';
 import { circleRose } from '../core/circleassist';
 import {
@@ -185,6 +187,28 @@ root.innerHTML = `
 const app = root.querySelector<HTMLElement>('#fly')!;
 const setEl = root.querySelector<HTMLElement>('#settings')!;
 const navEl = root.querySelector<HTMLElement>('#nav')!;
+
+// ---- the NAV screen is built ONCE, because it holds a text input ----
+//
+// The goto box is a caret, and a caret cannot live inside something render() rebuilds at 1 Hz — the
+// briefing learnt this, the settings panel learnt this, and a search field is the worst place to
+// forget it: a pilot typing `aub` into a box that reflows under his thumb gets `ab`, no result, and
+// the belief that goto is broken. So the input is static (data-i18n on empty labels, filled by
+// renderFlyChrome), and only the ROWS beneath it and the live panels below are repainted.
+navEl.innerHTML = `
+  <h2 data-i18n="nav.title"></h2>
+  <p class="note" data-i18n="nav.note"></p>
+  <section class="goto">
+    <h3 data-i18n="goto.title"></h3>
+    <input id="goto-query" type="search" autocomplete="off" autocorrect="off" spellcheck="false"
+           data-i18n-placeholder="goto.placeholder" />
+    <div id="goto-results"></div>
+  </section>
+  <div id="nav-live"></div>
+`;
+const navLive = navEl.querySelector<HTMLElement>('#nav-live')!;
+const gotoResultsEl = navEl.querySelector<HTMLInputElement>('#goto-results')!;
+const gotoQueryEl = navEl.querySelector<HTMLInputElement>('#goto-query')!;
 
 const bf = root.querySelector<HTMLElement>('#briefing')!;
 
@@ -372,7 +396,10 @@ let estimator = windEstimator();                   // VEN-001: OUR wind, never m
 let avgVario = rollingVario(30);                   // POS-006
 let circles = circlingTracker();                   // VAR-006: the last thermal, the last circle
 let rose = circleRose();                           // THE-001/002: where the lift was, around the turn
-let goal: { lon: number; lat: number; elev: number } | null = null;
+/** THE PLACE THE FINAL GLIDE IS TO. It carries a NAME now — the whole of TSK-011 is that this can be
+ *  Saint-Auban and not "here". Null name is the legitimate case of the `goal: here` button, which
+ *  aims at a spot with no name because the spot IS the pilot. */
+let goal: { lon: number; lat: number; elev: number; name: string | null } | null = null;
 
 // TER-008. The alarm is JUDGED ONCE, on the fix, and SHOWN twice — the banner reads it and so
 // does the speaker — exactly as `alts`/`altScope` are judged once and drawn twice. Recomputing
@@ -760,7 +787,7 @@ function render(s: NavState, link: LinkState): void {
   const boxIds = settings.layout.phases[shown];
 
   heroEl.innerHTML = heroHtml({
-    goalName: goal === null ? null : t('hero.goal'),
+    goalName: goal === null ? null : (goal.name ?? t('hero.goal')),
     distM: goal && s.fix ? distM(s.fix.lon, s.fix.lat, goal.lon, goal.lat) : null,
     arrivalM: arr?.height ?? null,
     phase: shown,
@@ -799,9 +826,7 @@ function render(s: NavState, link: LinkState): void {
   // status are all real, and none of them belongs between a pilot and his map. They are the fields
   // pilots themselves turn off first. They live on the NAV screen now: one tap, and it stays there.
   if (!navEl.hidden) {
-    navEl.innerHTML = `
-      <h2>${t('nav.title')}</h2>
-      <p class="note">${t('nav.note')}</p>
+    navLive.innerHTML = `
       ${trafficPanelHtml(fl, traffic.picture(s.fix?.sod ?? 0), settings.units, t)}
       ${airspaceHtml(s)}
       ${taskHtml(s)}
@@ -844,6 +869,43 @@ function render(s: NavState, link: LinkState): void {
   const sentences = igcToSentences(await f.text());
   void run({ id: `replay:${f.name}`, label: f.name, link: 'replay', open: replaySource(sentences, 100) });
 };
+// ---- TSK-011: the goto, from the pilot's own point file ----
+//
+// The source is `cup` — his .cup, the list of places he actually flies to. core/goto ranks them; the
+// shell only asks and obeys.
+//
+// The results are repainted on every keystroke, but the INPUT is not — it was built once (see the
+// static NAV shell), so the caret survives the pilot typing into it on a bumpy day.
+function renderGoto(): void {
+  if (navEl.hidden) return;
+  const from = state.fix ? { lon: state.fix.lon, lat: state.fix.lat } : null;
+  gotoHits = gotoSearch(cup, gotoQueryEl.value, from);
+  gotoResultsEl.innerHTML = gotoResultsHtml(gotoHits, gotoQueryEl.value, settings.units, t);
+}
+let gotoHits: GotoResult[] = [];
+gotoQueryEl.oninput = renderGoto;
+
+gotoResultsEl.onclick = e => {
+  const row = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-goto]');
+  if (row === null) return;
+  const p = gotoHits[Number(row.dataset.goto)]?.point;
+  if (p === undefined) return;
+
+  // THE ELEVATION IS A FINAL GLIDE, and it may not be invented. The .cup often carries the field's
+  // elevation; when it does not, the terrain DEM knows the ground there. If NEITHER does, there is no
+  // goal — an arrival height computed against a made-up elevation is the one number PLA-004 exists to
+  // never show, and it is worse here than a missing goal, because it looks exactly like a real one.
+  const elevM = p.elevM ?? elev(p.lon, p.lat);
+  if (elevM === null) {
+    gotoResultsEl.innerHTML = `<p class="goto-note bad">${t('goto.noElev', { name: p.name })}</p>`;
+    return;
+  }
+  goal = { lon: p.lon, lat: p.lat, elev: elevM, name: p.code ? `${p.name} (${p.code})` : p.name };
+  renderFlyChrome();
+  showTab('fly');            // he set his goal; put him back on the instrument, where the bar answers
+  render(state, link);
+};
+
 (root.querySelector('#set-goal') as HTMLButtonElement).onclick = () => {
   // The goal is where the glider IS, at the ground the DEM knows there. No fix or no ground
   // means no goal — a final glide to an invented elevation is exactly the number PLA-004
@@ -852,7 +914,7 @@ function render(s: NavState, link: LinkState): void {
     (root.querySelector('#goal-label') as HTMLElement).textContent = t('fly.noGoalNeedFix');
     return;
   }
-  goal = { lon: state.fix.lon, lat: state.fix.lat, elev: state.groundElev };
+  goal = { lon: state.fix.lon, lat: state.fix.lat, elev: state.groundElev, name: null };
   // renderFlyChrome derives the label from `goal` itself, in the pilot's language and his altitude
   // unit — one sentence, one place, and a language change repaints it.
   renderFlyChrome();
@@ -2005,16 +2067,22 @@ function renderFlyChrome(): void {
     el.textContent = t(el.dataset.i18n!);
   for (const el of root.querySelectorAll<HTMLElement>('[data-i18n-title]'))
     el.title = t(el.dataset.i18nTitle!);
+  // A placeholder is a label too, and the goto box has one. Left out, the search field would prompt
+  // the French pilot in English — the one word he reads while deciding whether to trust the feature.
+  for (const el of root.querySelectorAll<HTMLInputElement>('[data-i18n-placeholder]'))
+    el.placeholder = t(el.dataset.i18nPlaceholder!);
 
   // State, not markup: these four say what the app is DOING, and the sentence must be re-derived
   // rather than remembered — a remembered sentence is the old language's sentence.
   const goalLabel = root.querySelector<HTMLElement>('#goal-label')!;
   goalLabel.textContent = goal === null
     ? t('fly.noGoal')
-    : t('fly.goalAt', {
-        lat: goal.lat.toFixed(3), lon: goal.lon.toFixed(3),
-        elev: formatText(goal.elev, 'altitude', settings.units.altitude),
-      });
+    : goal.name !== null
+      ? t('fly.goalNamed', { name: goal.name, elev: formatText(goal.elev, 'altitude', settings.units.altitude) })
+      : t('fly.goalAt', {
+          lat: goal.lat.toFixed(3), lon: goal.lon.toFixed(3),
+          elev: formatText(goal.elev, 'altitude', settings.units.altitude),
+        });
   root.querySelector<HTMLElement>('#rec')!.textContent =
     logger === null ? t('fly.record') : t('fly.stopSave');
   root.querySelector<HTMLElement>('#audio-on')!.textContent =
@@ -2043,7 +2111,9 @@ function showTab(which: 'fly' | 'nav' | 'task' | 'briefing' | 'analysis' | 'sett
   // The NAV screen is painted by render(), and only while it is VISIBLE — the panels it holds are the
   // expensive ones (a traffic picture, an airspace sweep, a landables judgement), and paying for them
   // at 1 Hz behind a hidden div is how a flight computer runs a battery down for nothing.
-  if (which === 'nav') render(state, link);
+  // The NAV screen paints its live panels, and the goto box shows the nearest places for an empty
+  // query — so a pilot who opens NAV with no idea of a name still sees where he could go.
+  if (which === 'nav') { render(state, link); renderGoto(); }
   // Screen entry re-measures here too, and for the same reason the briefing does (OFF-010): tiles
   // land while this screen is hidden — a whole pack's worth, if the pilot went to the Briefing tab
   // to provision one — and onFlyTiles deliberately does not repaint a hidden canvas. Coming back

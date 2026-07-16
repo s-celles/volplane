@@ -550,3 +550,27 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
   border-radius: .4rem; box-shadow: 0 .25rem 1rem #0009;
 }
 #manual-view[hidden] { display: none; }
+
+/* ---- TSK-011: the goto search ---- */
+.goto { margin: .75rem 0; }
+#goto-query {
+  width: 100%; min-height: 3rem; font-size: 1.1rem; padding: .5rem .75rem;
+  box-sizing: border-box;
+}
+.goto-list { display: flex; flex-direction: column; gap: .25rem; margin-top: .5rem; }
+/* A row is a place he can fly to, and it is a TARGET a thumb can hit — 3 rem, the same floor as
+ * every other in-flight control, because he picks his goal one-handed while the aircraft moves. */
+.goto-row {
+  display: flex; align-items: baseline; gap: .6rem; width: 100%; min-height: 3rem;
+  text-align: left; padding: .3rem .75rem; background: #151920; border: 1px solid #2a313c;
+}
+.goto-row:hover { background: #1b212b; }
+.goto-name { font-weight: 600; }
+.goto-code { font-variant-numeric: tabular-nums; color: var(--dim); font-size: .85rem; }
+.goto-cat { color: var(--dim); font-size: .8rem; }
+/* Distance and bearing sit at the right, monospaced so a glance down the list compares like with
+ * like — the same reason the landables panel pads its bearings to three digits. */
+.goto-dist { margin-left: auto; font-variant-numeric: tabular-nums; }
+.goto-brg { font-variant-numeric: tabular-nums; color: var(--dim); min-width: 3.2ch; text-align: right; }
+.goto-note { color: var(--dim); font-size: .9rem; margin: .5rem 0; }
+.goto-note.bad { color: var(--bad); }

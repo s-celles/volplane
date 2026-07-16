@@ -361,4 +361,12 @@ export const FR: Record<MsgId, string> = {
   'layout.tooFew': '{phase} : {have} cases, c’est moins que {min} et ce n’est plus un instrument. La rangée par défaut est utilisée.',
   'layout.tooMany': '{phase} : {have} cases, c’est plus que {max}. La rangée a été coupée.',
   'layout.ragged': 'Les rangées n’ont pas toutes la même longueur ({lengths}) : toutes ont été coupées à {used}. Une rangée qui change de longueur entre deux phases déplace toutes les cases en dessous — et le principe du cadre, c’est qu’un nombre ne bouge pas.',
+
+  // ---- TSK-011: goto ----
+  'goto.title': 'Aller vers un point',
+  'goto.placeholder': 'un nom, ou son début — LFN, saint, aub…',
+  'goto.empty': 'Tapez un nom, ou les terrains les plus proches s’affichent ici dès que le GPS a une position.',
+  'goto.none': 'Aucun point de ce nom dans le fichier chargé.',
+  'goto.noElev': '{name} n’a pas d’altitude, et le relief n’est pas chargé ici — un plané final vers ce point serait un nombre inventé, il est donc refusé.',
+  'fly.goalNamed': '{name} — {elev}',
 };

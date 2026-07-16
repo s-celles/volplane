@@ -382,4 +382,12 @@ export const EN = {
   'layout.tooFew': '{phase}: {have} boxes is fewer than {min}, which is not an instrument. The default row is used.',
   'layout.tooMany': '{phase}: {have} boxes is more than {max}. The row was cut.',
   'layout.ragged': 'The rows are not all the same length ({lengths}), so every one was cut to {used}. A row that changes length between phases moves every box below it — and the point of the frame is that a number does not move.',
+
+  // ---- TSK-011: goto ----
+  'goto.title': 'Fly to a point',
+  'goto.placeholder': 'a name, or the start of one — LFN, saint, aub…',
+  'goto.empty': 'Type a name, or the nearest fields show here once the GPS has a fix.',
+  'goto.none': 'No point by that name in the loaded file.',
+  'goto.noElev': '{name} has no elevation, and the terrain here is not loaded — a final glide to it would be a made-up number, so it is refused.',
+  'fly.goalNamed': '{name} — {elev}',
 } as const satisfies Record<string, string>;
