@@ -574,3 +574,13 @@ table.wind { margin-top: .75rem; border-collapse: collapse; font-variant-numeric
 .goto-brg { font-variant-numeric: tabular-nums; color: var(--dim); min-width: 3.2ch; text-align: right; }
 .goto-note { color: var(--dim); font-size: .9rem; margin: .5rem 0; }
 .goto-note.bad { color: var(--bad); }
+
+/* CAR-002: the orientation button. A glance and a tap — 3 rem, the in-flight floor — sitting under
+ * the zoom pair. Degraded (track-up with no track, heading-up with no compass) it goes amber, and its
+ * title says why: a map that quietly shows north when the pilot asked for track is a map lying about
+ * which way he points. */
+.map-orient {
+  position: absolute; top: 7.5rem; right: .5rem; width: 3rem; height: 3rem;
+  font-size: .9rem; font-weight: 700; letter-spacing: .04em; padding: 0;
+}
+.map-orient.degraded { color: #0b0d10; background: var(--warn); border-color: var(--warn); }

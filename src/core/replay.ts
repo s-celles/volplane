@@ -8,6 +8,7 @@
 // soaring-core does the IGC reading (C4: what is generic lives there); this file only turns
 // its track points back into the NMEA dialect our own front door speaks.
 import { parseIGC } from 'soaring-core/igc';
+import { distM, bearingDeg } from 'soaring-core/geo';
 
 const checksum = (body: string): string => {
   let c = 0;
@@ -36,7 +37,41 @@ export function gga(lon: number, lat: number, alt: number, sod: number): string 
   return `$${body}*${checksum(body)}`;
 }
 
-/** A whole IGC file -> the sentences of its flight, in order. */
+/** One track point -> one $GPRMC, carrying COURSE and GROUND SPEED.
+ *
+ *  A B-record has neither — an IGC file is positions and times. But the course and speed BETWEEN two
+ *  fixes are not an invention: they are the real geometry of the flight, the same track and speed a
+ *  GPS computes from the same movement. Emitting them makes a replay behave like a flight rather than
+ *  like a positions-only feed — which is the whole point of ACQ-010, and it is what lets a pilot
+ *  rehearse a track-up screen (CAR-002) on the ground before he trusts it in the air.
+ *
+ *  The FIRST fix has no previous one to measure from, so it gets no RMC: course and speed are unknown
+ *  there, and unknown is emitted as nothing, never as zero. */
+export function rmc(lon: number, lat: number, sod: number, speedKt: number, courseDeg: number): string {
+  const h = Math.floor(sod / 3600), m = Math.floor(sod / 60) % 60, s = sod % 60;
+  const hms = `${String(h).padStart(2, '0')}${String(m).padStart(2, '0')}${String(s).padStart(2, '0')}.00`;
+  const body = `GPRMC,${hms},A,${dm(lat, 2)},${lat < 0 ? 'S' : 'N'},${dm(lon, 3)},${lon < 0 ? 'W' : 'E'}`
+    + `,${speedKt.toFixed(1)},${courseDeg.toFixed(1)},,,,`;
+  return `$${body}*${checksum(body)}`;
+}
+
+/** A whole IGC file -> the sentences of its flight, in order.
+ *
+ *  Each fix is a GGA (position, altitude) and, from the second on, an RMC (course, speed derived from
+ *  the leg just flown). Two sentences per fix, exactly as a real GPS emits them. */
 export function igcToSentences(txt: string): string[] {
-  return parseIGC(txt).map(([lon, lat, alt, sod]) => gga(lon, lat, alt, sod));
+  const pts = parseIGC(txt);
+  const out: string[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const [lon, lat, alt, sod] = pts[i]!;
+    out.push(gga(lon, lat, alt, sod));
+    if (i === 0) continue;
+    const [plon, plat, , psod] = pts[i - 1]!;
+    const dtS = sod - psod;
+    if (dtS <= 0) continue;                       // same second, or time ran backwards: no course from it
+    const d = distM(plon, plat, lon, lat);
+    const speedKt = (d / dtS) / 0.514444;         // m/s -> knots, the unit RMC speaks
+    out.push(rmc(lon, lat, sod, speedKt, bearingDeg(plon, plat, lon, lat)));
+  }
+  return out;
 }

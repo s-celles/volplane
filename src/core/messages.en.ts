@@ -390,4 +390,18 @@ export const EN = {
   'goto.none': 'No point by that name in the loaded file.',
   'goto.noElev': '{name} has no elevation, and the terrain here is not loaded — a final glide to it would be a made-up number, so it is refused.',
   'fly.goalNamed': '{name} — {elev}',
+
+  // ---- CAR-002: map orientation ----
+  'orient.north-up.short': 'N',
+  'orient.north-up.title': 'North up. The map does not turn — tap to follow your track.',
+  'orient.track-up.short': 'TRK',
+  'orient.track-up.title': 'Track up: the way you are actually moving is at the top.',
+  'orient.heading-up.short': 'HDG',
+  'orient.heading-up.title': 'Heading up: where the nose points is at the top.',
+  'orient.target-up.short': 'TGT',
+  'orient.target-up.title': 'Target up: the goal is straight up the screen.',
+  'orient.degraded.no-heading': 'Heading up asked for, but nothing aboard measures the nose — showing north.',
+  'orient.degraded.no-target': 'Target up asked for, but there is no goal — showing north.',
+  'orient.degraded.no-track': 'Track up asked for, but you are too slow for a course to mean anything — showing north.',
+  'orient.degraded.circling': 'Track up held at north while circling: following the turn would spin the map.',
 } as const satisfies Record<string, string>;

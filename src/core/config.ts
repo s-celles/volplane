@@ -14,6 +14,9 @@ import { LANGS, isLang, type Lang } from './i18n';
 import { DEFAULT_UNITS, QUANTITIES, toSI, type UnitPrefs, type UnitSystem } from './units';
 import { defaultLayout, sanitizeLayout, PHASES, type Layout } from './layout';
 import type { Phase } from './phase';
+import type { OrientMode } from './orient';
+
+const ORIENT_MODES: readonly OrientMode[] = ['north-up', 'track-up', 'heading-up', 'target-up'];
 import { gliderById, polarOf } from './polarlib';
 
 /** Everything the pilot can configure that must come back at the next launch. */
@@ -64,6 +67,10 @@ export interface Settings {
    *  written on the screen for exactly this reason, and a pilot who still dislikes it can have his
    *  choice of phase row back — the same three rows, picked by hand. */
   autoPhase: boolean;
+  /** CAR-002: which way is up on the moving map. `north-up` is the default, because it is the one
+   *  orientation that needs no fix and never surprises — the map that does not rotate is the map this
+   *  app has always drawn. The pilot chooses track/heading/target when he wants them. */
+  orientMode: OrientMode;
   /** The library glider he picked (CFG-002), with the mass he flies it at — that massKg IS the
    *  "adjustable" of "polaires prédéfinies et ajustables". Null massKg means the entry's own
    *  reference mass: we do not invent his ballast (POT-007). Null altogether means he picked no
@@ -80,6 +87,7 @@ export const DEFAULT_SETTINGS: Settings = {
   layout: defaultLayout(),
   manualPhase: 'cruise',
   autoPhase: true,
+  orientMode: 'north-up',
   glider: null,
 };
 
@@ -183,6 +191,7 @@ export function normalizeSettings(raw: unknown): Settings {
     // repair is the default, not `false`. A pilot upgrading into this release has never seen the
     // setting and should get the behaviour it exists to give him.
     autoPhase: typeof r.autoPhase === 'boolean' ? r.autoPhase : DEFAULT_SETTINGS.autoPhase,
+    orientMode: ORIENT_MODES.includes(r.orientMode as OrientMode) ? r.orientMode as OrientMode : 'north-up',
     glider: repairGlider(r.glider),
   };
 }

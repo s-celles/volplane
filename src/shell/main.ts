@@ -43,6 +43,8 @@ import { chooseVoice } from '../core/alarmtone';
 import { circlingTracker } from '../core/circling';
 import { nextPhase, type Phase } from '../core/phase';
 import { recogniser, type Gesture } from '../core/gesture';
+import { orient, unrotatePx, INITIAL as ORIENT_INITIAL, type OrientState } from '../core/orient';
+import { mapTransform, OVERSCAN } from './maprotate';
 import { gotoSearch, type GotoResult } from '../core/goto';
 import { gotoResultsHtml } from './goto-ui';
 import { heroHtml, glideBarHtml } from './flyframe-ui';
@@ -266,6 +268,7 @@ app.innerHTML = `
         <button id="zoom-in" type="button">+</button>
         <button id="zoom-out" type="button">−</button>
       </div>
+      <button id="orient-mode" type="button" class="map-orient"></button>
       <button id="manual-view" type="button" hidden></button>
       <div id="fly-aside">
         <div id="xsection" class="xsection-frame"></div>
@@ -350,6 +353,19 @@ const heroEl = root.querySelector<HTMLElement>('#hero-strip')!;
 const glidebarEl = root.querySelector<HTMLElement>('#glidebar-slot')!;
 const alertsEl = root.querySelector<HTMLElement>('#fly-alerts')!;
 const manualEl = root.querySelector<HTMLButtonElement>('#manual-view')!;
+const orientEl = root.querySelector<HTMLButtonElement>('#orient-mode')!;
+
+// CAR-002: one button, cycling north -> track -> heading -> target. A picker in a menu is a picker a
+// pilot reaches for once; a button on the map is a glance and a tap, which is what changing what is
+// up amounts to. The LABEL says what is actually at the top (orient's `top`, not the mode asked for),
+// and a degraded mode wears a mark and a reason, because a track-up that quietly shows north is a
+// map lying about which way the pilot is pointing.
+const ORIENT_CYCLE = ['north-up', 'track-up', 'heading-up', 'target-up'] as const;
+orientEl.onclick = () => {
+  const i = ORIENT_CYCLE.indexOf(settings.orientMode);
+  applySettings({ orientMode: ORIENT_CYCLE[(i + 1) % ORIENT_CYCLE.length] });
+  render(state, link);
+};
 
 /** The phase of the flight, carried between renders because it has HYSTERESIS: an arrival height
  *  hovering around the reserve would otherwise flip the whole screen back and forth at 1 Hz, and a
@@ -459,6 +475,12 @@ let mapWidthM = DEFAULT_WIDTH_M;                   // CAR: zoom, metres across t
  *  way back. Other computers use a timeout, and a timeout is a machine deciding he has finished
  *  looking. A banner is him deciding. */
 let manualCentre: { lon: number; lat: number } | null = null;
+
+/** CAR-002's memory. The smoothing carries between frames — a slew half-done this render finishes the
+ *  next — so the state lives here, and lastRotationRad is what the pan gesture unrotates a drag by. */
+let orientState: OrientState = ORIENT_INITIAL;
+let lastOrientSod: number | null = null;
+let lastRotationRad = 0;
 
 /** Where the map looks when there is no fix and nobody has panned. Somewhere in the Alps, and it is
  *  a placeholder, not a position — but it is a place the pilot may want to look AROUND before the
@@ -605,9 +627,39 @@ function repaintMap(s: NavState, stale: boolean): void {
     canvasEl.height = h;
   }
 
-  const ctx = canvasEl.getContext('2d') as unknown as MapPaint2D;
+  const real = canvasEl.getContext('2d')!;
+  const ctx = real as unknown as MapPaint2D;
   const centre = manualCentre ?? (s.fix ? { lon: s.fix.lon, lat: s.fix.lat } : NOWHERE);
   const view: MapView = { centre, widthM: mapWidthM, wPx: canvasEl.width, hPx: canvasEl.height };
+
+  // ---- CAR-002: which way is up ----
+  //
+  // orient.ts holds all of it — the circular smoothing the 359->1 wrap needs, the hysteresis that
+  // keeps a jittering track from spinning the map, the refusals (heading-up with no compass aboard,
+  // track-up while circling). Here we only feed it and turn the canvas by what it says.
+  //
+  // dtS is the fix clock, not the wall clock: renders also fire on a zoom or a tab switch, and the
+  // map must not SLEW on those — dtS 0 redraws at the angle it already had. The orientation state
+  // persists across renders because its smoothing is a memory.
+  const targetBrg = goal && s.fix ? bearingDeg(s.fix.lon, s.fix.lat, goal.lon, goal.lat) : null;
+  const sod = s.fix?.sod ?? null;
+  const dtS = sod !== null && lastOrientSod !== null ? Math.max(0, sod - lastOrientSod) : 0;
+  if (sod !== null) lastOrientSod = sod;
+  const o = orient(orientState, {
+    mode: settings.orientMode,
+    trackDeg: s.track ?? null,
+    groundSpeedMs: s.groundSpeed ?? null,
+    headingDeg: null,                       // nothing measures the nose today; orient refuses honestly
+    targetBearingDeg: targetBrg,
+    circling: circles.circling(),
+  }, dtS);
+  orientState = o.state;
+  lastRotationRad = o.rotationRad;
+  orientEl.textContent = t(`orient.${settings.orientMode}.short`);
+  orientEl.classList.toggle('degraded', o.degraded !== null);
+  orientEl.title = o.degraded !== null
+    ? t(`orient.degraded.${o.degraded}`)
+    : t(`orient.${settings.orientMode}.title`);
   // The still-air range: AGL × best-glide L/D, no wind. It is the FALLBACK now — kept only
   // for when the reach cannot be marched, and still stamped with its assumption.
   const ld = glideRatio(polar, speedToFly(polar, 0));
@@ -625,7 +677,22 @@ function repaintMap(s: NavState, stale: boolean): void {
     // a reach would say "you can go nowhere", which is a claim, not an absence.
     if (reach.every(r => r.distanceM === 0)) reach = null;
   }
-  paintMovingMap(ctx, view, {
+  // A rotated square leaves its four corners uncovered — the picture pulls inward and the dark
+  // background shows through as triangles. So when the map turns, it is drawn OVERSCANNED: the same
+  // scale over a larger area, centred, so the corners stay full after the rotation. North-up pays
+  // none of this — it takes the plain path, pixel-for-pixel what this app has always drawn.
+  const rotating = Math.abs(o.rotationRad) > 1e-3;
+  if (rotating) {
+    // The transform is mapTransform's, not hand-rolled here, so the geometry the browser could never
+    // let me watch is the geometry maprotate.test pins: the glider stays under the pivot, and the
+    // overscan clears the corners. save/restore, so nothing downstream sees a turned canvas.
+    real.save();
+    real.setTransform(...mapTransform(o.rotationRad, canvasEl.width, canvasEl.height));
+  }
+  const paintView: MapView = rotating
+    ? { centre, widthM: mapWidthM * OVERSCAN, wPx: canvasEl.width * OVERSCAN, hPx: canvasEl.height * OVERSCAN }
+    : view;
+  paintMovingMap(ctx, paintView, {
     state: s, trail, spaces, traffic: traffic.picture(s.fix?.sod ?? 0),
     goal: goal ? { lon: goal.lon, lat: goal.lat } : null, rangeM, reach, landmarks,
     // TER-001: the ground goes UNDER everything, and it goes under it measured — the painter
@@ -650,6 +717,7 @@ function repaintMap(s: NavState, stale: boolean): void {
     // in the pilot's units, like every other number on this screen.
     units: settings.units,
   }, t);
+  if (rotating) real.restore();
 
   // ANA-002: the slice straight ahead — the dimension the plan view flattens away.
   const xs = root.querySelector<HTMLElement>('#xsection');
@@ -1179,9 +1247,14 @@ const resetView = (): void => {
  *  WEST. Getting this backwards produces a map that fights the hand, which every pilot will describe
  *  as "broken" and none will describe correctly. */
 const M_PER_DEG_LAT = 111_320;
-const panBy = (dxPx: number, dyPx: number): void => {
+const panBy = (dxScreenPx: number, dyScreenPx: number): void => {
   const canvasEl = root.querySelector<HTMLCanvasElement>('#map');
   if (canvasEl === null || canvasEl.width === 0) return;
+  // The finger moves in SCREEN space; the map may be turned under it. A drag towards the top of a
+  // track-up map should uncover ground AHEAD, not ground to the north — so the screen delta is turned
+  // back into map space by exactly the angle the canvas was turned by. On a north-up map this is the
+  // identity and costs nothing.
+  const [dxPx, dyPx] = unrotatePx(dxScreenPx, dyScreenPx, lastRotationRad);
   const base = manualCentre ?? (state.fix ? { lon: state.fix.lon, lat: state.fix.lat } : NOWHERE);
   const mPerPx = mapWidthM / canvasEl.width;
   const lat = base.lat + (dyPx * mPerPx) / M_PER_DEG_LAT;

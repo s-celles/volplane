@@ -369,4 +369,18 @@ export const FR: Record<MsgId, string> = {
   'goto.none': 'Aucun point de ce nom dans le fichier chargé.',
   'goto.noElev': '{name} n’a pas d’altitude, et le relief n’est pas chargé ici — un plané final vers ce point serait un nombre inventé, il est donc refusé.',
   'fly.goalNamed': '{name} — {elev}',
+
+  // ---- CAR-002: map orientation ----
+  'orient.north-up.short': 'N',
+  'orient.north-up.title': 'Nord en haut. La carte ne tourne pas — touchez pour suivre votre route.',
+  'orient.track-up.short': 'RTE',
+  'orient.track-up.title': 'Route en haut : le sens réel de votre déplacement est en haut.',
+  'orient.heading-up.short': 'CAP',
+  'orient.heading-up.title': 'Cap en haut : la direction du nez est en haut.',
+  'orient.target-up.short': 'BUT',
+  'orient.target-up.title': 'Cible en haut : le but est droit devant, en haut de l’écran.',
+  'orient.degraded.no-heading': 'Cap en haut demandé, mais rien à bord ne mesure le nez — nord affiché.',
+  'orient.degraded.no-target': 'Cible en haut demandée, mais il n’y a pas de but — nord affiché.',
+  'orient.degraded.no-track': 'Route en haut demandée, mais vous êtes trop lent pour qu’une route ait un sens — nord affiché.',
+  'orient.degraded.circling': 'Route en haut maintenue au nord en spirale : suivre le virage ferait tourner la carte.',
 };
